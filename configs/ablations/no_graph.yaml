@@ -1,0 +1,7 @@
+# Ablation: disable the two-layer dependency graph (no dead-step pruning,
+# no von Neumann entropy term in DTO).
+# Expected effect: accuracy unchanged, but higher token cost (no pruning).
+name: no_graph
+seed: 0
+ablation:
+  dependency_graph: false

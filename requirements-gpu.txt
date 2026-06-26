@@ -1,0 +1,9 @@
+# Experiment-VM dependencies (GPU). Install with:  pip install -r requirements-gpu.txt
+# These are imported lazily by acdan.backends — the core package never needs them.
+vllm>=0.6
+torch>=2.3
+transformers>=4.44
+sentence-transformers>=3.0
+
+# Claude API roles (independent verifier / LLM-as-judge). Optional.
+anthropic>=0.40

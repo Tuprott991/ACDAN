@@ -1,0 +1,7 @@
+# Ablation: disable self-verification & confidence calibration.
+# Expected effect: accuracy unchanged, but worse calibration (higher ECE) and
+# no abstention / risk control (coverage = 1.0).
+name: no_verification
+seed: 0
+ablation:
+  verification: false

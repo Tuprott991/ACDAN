@@ -1,0 +1,6 @@
+# Ablation: disable Differentiable Textual Optimization (greedy decode instead).
+# Expected effect: large accuracy drop -> DTO is the primary accuracy driver.
+name: no_dto
+seed: 0
+ablation:
+  dto: false

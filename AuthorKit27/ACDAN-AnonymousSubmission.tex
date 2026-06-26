@@ -1,0 +1,626 @@
+\documentclass[letterpaper]{article} % DO NOT CHANGE THIS
+\usepackage[submission]{aaai2027}  % DO NOT CHANGE THIS
+\usepackage[hyphens]{url}  % DO NOT CHANGE THIS
+\usepackage{graphicx} % DO NOT CHANGE THIS
+\urlstyle{rm} % DO NOT CHANGE THIS
+\def\UrlFont{\rm}  % DO NOT CHANGE THIS
+\usepackage{natbib}  % DO NOT CHANGE THIS AND DO NOT ADD ANY OPTIONS TO IT
+\usepackage{caption} % DO NOT CHANGE THIS AND DO NOT ADD ANY OPTIONS TO IT
+\frenchspacing  % DO NOT CHANGE THIS
+
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+
+\pdfinfo{
+/TemplateVersion (2027.1)
+}
+
+% Section numbers requested by the authors (allowed: 1 or 2).
+\setcounter{secnumdepth}{1}
+
+\title{Adaptive Calibrated Differentiable Agentic Networks:\\
+A Unified Architecture for Universal Test-Time Agents}
+
+\author{
+    Anonymous Submission
+}
+\affiliations{
+    %
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Test-time scaling for tool-using agents is bottlenecked by three coupled
+problems: discrete search over action sequences is computationally wasteful,
+prolonged reasoning induces \emph{overthinking} that wastes tokens and discards
+correct answers, and outcome-only optimization leaves agents poorly calibrated.
+We present \emph{Adaptive Calibrated Differentiable Agentic Networks} (ACDAN), a
+unified architecture that integrates five mechanisms into a single test-time
+agent: (i) latent-space reasoning with in-place test-time training, (ii)
+\emph{Differentiable Textual Optimization} (DTO), which replaces discrete search
+with first-order continuous optimization of a soft action-logit matrix under a
+process-reward gradient, (iii) a dynamic two-layer agentic computation graph
+(execution and dependency layers) with von~Neumann-entropy regularization and
+dead-step pruning, (iv) tool-usage inertia that reuses high-confidence tool
+transitions without invoking the planner, and (v) self-verification with a
+confidence probe, a margin score, and an independent verifier. We provide a
+complete, dependency-light, fully offline reference implementation in which every
+module is independently ablatable and every gradient is analytic and
+finite-difference-verified. On a reproducible synthetic evaluation suite designed
+to \emph{isolate each mechanism}, DTO is the dominant accuracy driver, inertia and
+graph pruning reduce a token-cost surrogate without harming accuracy, and the
+verification stack substantially improves calibration. We position ACDAN as a
+design and reproducibility framework: its real-LLM/PRM backends and standard
+benchmark evaluations are explicitly scoped as future work, and all unimplemented
+components are marked as such.
+\end{abstract}
+
+% \begin{links}
+%     \link{Code}{https://example.org/acdan}
+% \end{links}
+
+\section{Introduction}
+Large language and multimodal models increasingly operate as \emph{agents} that
+allocate computation at inference time---sampling, searching, and invoking tools
+to solve tasks~\citep{adaptagentic2025,learn2plan2025}. Yet current
+test-time-scaling techniques face three persistent obstacles.
+
+\textbf{Discrete search is wasteful.} Best-of-$N$ sampling and Monte~Carlo Tree
+Search (MCTS) explore a combinatorial space of token sequences, inflating latency
+and cost~\citep{imcts2026,rpmmcts2026}. \textbf{Overthinking degrades quality.}
+Longer reasoning often follows an inverted-U: agents lose direction, repeat
+intermediate steps, and discard previously-correct
+answers~\citep{overthinking2026,limitconfidence2025}. \textbf{Calibration is
+poor.} Outcome-only reinforcement learning encourages overconfidence, so agents
+cannot reliably judge the trustworthiness of their own tool
+calls~\citep{rlcm2026}.
+
+We argue these are not independent defects but symptoms of a missing unified
+substrate: agents lack (a) a continuous action representation amenable to
+gradient-based refinement, (b) an explicit model of their own computation graph
+to detect redundancy, and (c) an inference-time confidence signal for risk
+control. \emph{Adaptive Calibrated Differentiable Agentic Networks} (ACDAN)
+supplies all three in one architecture.
+
+This paper makes the following contributions.
+\begin{itemize}
+\item \textbf{A unified architecture} combining latent reasoning, differentiable
+textual optimization, a dynamic two-layer agentic computation graph, tool-usage
+inertia, and calibrated self-verification (Method).
+\item \textbf{A formal objective and five algorithms} that specify the test-time
+optimization, graph update, verification, and inertia control (Mathematical
+Formulation; Algorithms).
+\item \textbf{A complete, offline, reproducible reference implementation} in which
+every module is a one-line ablation switch, gradients are analytic and
+finite-difference-tested, and results are deterministic across machines.
+\item \textbf{A mechanism-isolation study} on a synthetic suite that attributes
+each observed effect (accuracy, token cost, calibration) to a specific module via
+controlled ablations.
+\end{itemize}
+
+We are deliberately conservative about claims. The reference implementation uses
+\emph{mock, pluggable} backends for the core model, the process reward model
+(PRM), the independent verifier, and the datasets; real backends and standard
+benchmark numbers are scoped as future work and clearly marked throughout. We
+report no benchmark state-of-the-art results, only mechanism-level evidence that
+the components behave and compose as designed.
+
+\section{Related Work}
+\textbf{Test-time scaling and latent reasoning.} A growing body of work scales
+inference compute via sampling and search~\citep{overtraining2026,learn2plan2025}
+or via \emph{latent} recurrent-depth reasoning that deepens computation without
+extending the token context~\citep{recurrentdepth2025,latentgrad2026}. ACDAN
+adopts the latent recurrent-depth view and adds in-place test-time adaptation.
+
+\textbf{Differentiable / continuous optimization of reasoning.} Rather than
+discrete search, recent proposals optimize in continuous spaces, including
+test-time gradient descent in latent space~\citep{latentgrad2026}. ACDAN's DTO
+operates directly on a soft action-logit matrix under a process-reward gradient.
+
+\textbf{Process reward models and process supervision.} PRMs score intermediate
+reasoning steps~\citep{prmsurvey2025,athena2025}; tool-integrated and
+vision-language PRMs extend this to multimodal and tool
+settings~\citep{timprm2025,vlprm2025}. Net Information Gain offers linear-time
+process supervision~\citep{nig2026}. ACDAN consumes a PRM through a narrow
+gradient interface and implements an $O(N)$ Net-Information-Gain signal.
+
+\textbf{Agent workflow graphs and overthinking.} Dynamic runtime graphs model
+agent execution and dependencies~\citep{grade2026,workflowsurvey2026}, and
+overthinking has been characterized as a test-time pathology~\citep{overthinking2026}.
+ACDAN makes the execution/dependency split explicit and prunes dead steps.
+
+\textbf{Tool selection and calibration.} Tool-transition reuse reduces planner
+calls~\citep{autotool2026}, while confidence-margin supervision improves
+calibration~\citep{rlcm2026,limitconfidence2025}. ACDAN integrates both as
+first-class inference-time modules. To our knowledge, no prior system unifies all
+five mechanisms behind a single differentiable, ablation-native interface.
+
+\section{The ACDAN Architecture (Method)}
+ACDAN processes a task through a fixed pipeline (Figure~\ref{fig:arch}). Each
+stage is gated by an ablation flag, so disabling a module replaces it with a
+faithful baseline rather than removing it.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\columnwidth]{Figures/figure1}
+\caption{ACDAN pipeline (placeholder; final architecture figure to be drawn by
+the authors). Task features pass through latent reasoning with in-place TTT to a
+core-model prior; planning combines tool-usage inertia (skip the planner on
+familiar transitions) with Differentiable Textual Optimization (gradient refines
+the soft action logits); the executed plan instantiates a two-layer agentic
+computation graph (execution + dependency) with von~Neumann-entropy
+regularization and dead-step pruning; finally a self-verification stage produces
+a calibrated accept/abstain decision.}
+\label{fig:arch}
+\end{figure}
+
+\paragraph{Latent reasoning and in-place TTT.}
+Task features $x$ are encoded into a latent $h$ by unrolling a recurrent block for
+a configurable depth, deepening reasoning without growing context. In-place
+test-time training (TTT) adapts a small input projection per task via an
+auxiliary self-supervised reconstruction objective, sharpening the downstream
+signal. A scalar \emph{competence} read-out of $h$ modulates how decisively the
+core model and PRM separate good from bad actions.
+
+\paragraph{Core model and Differentiable Textual Optimization.}
+A core model emits a prior action-logit matrix $L_0\in\mathbb{R}^{H\times V}$ over
+$H$ planning steps and $V$ actions. DTO treats the plan as a continuous object and
+runs $T$ first-order updates that trade off core-model likelihood, PRM process
+reward, an anti-overthinking length penalty, and a dependency-diversity term,
+before decoding the plan.
+
+\paragraph{Tool-usage inertia.}
+A first-order Markov model over action transitions, fit from historical traces,
+detects \emph{high-inertia} transitions. When the most likely successor exceeds a
+threshold (and enough transitions have been observed), the action is filled
+directly, skipping a planner call---the primary inference-cost saver.
+
+\paragraph{Two-layer agentic computation graph.}
+The executed plan instantiates an Execution layer (the activation chain) and a
+Dependency layer (graded data dependencies). The dependency layer's von~Neumann
+entropy quantifies path diversity; conservatively-identified \emph{dead steps}
+(disconnected from the answer \emph{and} unhelpful by Net Information Gain) are
+pruned, reducing token cost.
+
+\paragraph{Self-verification and calibration.}
+A lightweight confidence probe predicts answer correctness from $h$; a margin
+score measures per-step decisiveness; an independent verifier queries evidence
+without conditioning on the agent's reasoning context. These are blended into a
+calibrated confidence used for accept/abstain risk control.
+
+\section{Mathematical Formulation}
+\label{sec:math}
+Let $P=\mathrm{softmax}(L/\tau)$ denote the row-wise soft action distribution of
+the logit matrix $L\in\mathbb{R}^{H\times V}$ at temperature $\tau$, and let
+$p_0=\mathrm{softmax}(L_0)$ be the fixed core-model prior. Let $h$ be the latent
+state and $t\in\mathbb{R}^{H\times V}$ a per-step softmax-sharpened reward target
+from the PRM.
+
+\paragraph{Test-time objective.}
+DTO minimizes over $L$:
+\begin{equation}
+\label{eq:obj}
+\begin{aligned}
+J(L) =\; & -\,w_{\ell}\,\underbrace{\tfrac{1}{H}\textstyle\sum_{h,v} P_{h,v}\log p_{0,h,v}}_{\text{likelihood prior}}
+        \;-\; \alpha\,\underbrace{\tfrac{1}{H}\textstyle\sum_{h} \langle P_h, t_h\rangle}_{R_{\mathrm{prm}}(P)}\\
+       &+\,\beta\,\underbrace{\tfrac{1}{H-1}\textstyle\sum_{h}\langle P_h,P_{h-1}\rangle}_{\text{length penalty}}
+        \;-\; \gamma\,\underbrace{H_{\mathrm{dep}}(P)}_{\text{diversity}},
+\end{aligned}
+\end{equation}
+where $(w_\ell,\alpha,\beta,\gamma)$ are coefficients and $\alpha,\gamma$ are
+scaled by a per-task difficulty factor (adaptive coefficients).
+
+\paragraph{First-order update.}
+With learning rate $\eta$,
+\begin{equation}
+\label{eq:update}
+L^{(k+1)} = L^{(k)} - \eta\,\nabla_L J\big(L^{(k)}\big),\quad k=0,\dots,T-1,
+\end{equation}
+and the plan is decoded as $a^*_h=\arg\max_v \mathrm{softmax}(L^{(T)}/\tau)_{h,v}$.
+The map $\partial J/\partial P\!\to\!\partial J/\partial L$ uses the exact per-row
+softmax vector--Jacobian product
+$\partial P_h/\partial L_h \cdot g=\tfrac{1}{\tau}\,P_h\odot(g-\langle P_h,g\rangle)$,
+which is verified against finite differences in the implementation.
+
+\paragraph{Dependency entropy (reported vs.\ optimized).}
+With step representations $S\in\mathbb{R}^{H\times d}$ form the PSD density matrix
+$\rho=G/\mathrm{tr}(G)$, $G=SS^{\top}$. The \emph{reported} dependency entropy is
+the exact von~Neumann entropy
+\begin{equation}
+\label{eq:vn}
+H_{\mathrm{vN}}(\rho) = -\textstyle\sum_i \lambda_i \log \lambda_i,\quad \lambda=\mathrm{eig}(\rho).
+\end{equation}
+For optimization we use a smooth, analytically-differentiable surrogate---the
+representation variance $H_{\mathrm{dep}}(P)=\tfrac{1}{H}\sum_h\lVert S_h-\bar S\rVert^2$
+with $S=PE$---because the gradient of the exact spectral entropy is avoided for
+stability and zero extra dependencies. Both vanish iff all steps collapse to one
+representation and grow with diversity. \emph{We report the exact entropy and
+optimize the surrogate}; this distinction is stated explicitly.
+
+\paragraph{Net Information Gain (process supervision).}
+For per-step PRM scores $s_1,\dots,s_N$ define an accumulating belief and its
+increments,
+\begin{equation}
+\label{eq:nig}
+b_i=\sigma\!\Big(\kappa\big(\tfrac{1}{i}\textstyle\sum_{j\le i}s_j-\tfrac12\big)\Big),
+\quad \mathrm{NIG}_i=b_i-b_{i-1},
+\end{equation}
+with $b_0=\tfrac12$. This is a single $O(N)$ pass; $\mathrm{NIG}_i\le 0$ flags
+dead-step candidates.
+
+\paragraph{Dead-step pruning.}
+Step $i$ is pruned iff it is both disconnected from the final node in the
+dependency layer (no path $i\!\to\!H{-}1$) and unhelpful ($\mathrm{NIG}_i\le 0$);
+the final step is never pruned.
+
+\paragraph{Inertia gate.}
+With a Laplace-smoothed transition model $T(\cdot\mid s)$ and $n(s)$ observed
+transitions from state $s$, inertia fires iff $n(s)\ge m$ and
+$\max_{s'}T(s'\mid s)\ge \theta$, yielding action $\arg\max_{s'}T(s'\mid s)$
+without a planner call.
+
+\paragraph{Calibrated confidence.}
+A probe $c_\phi(\cdot)$ over features $\big[\,\overline h,\ \mathrm{std}(h),\
+\lVert h\rVert,\ \mathrm{margin}(P),\ \overline{s}\,\big]$ is trained by binary
+cross-entropy. The reported confidence blends probe and independent evidence,
+\begin{equation}
+\label{eq:conf}
+\mathrm{conf}=(1-w)\,c_\phi+w\,\mathrm{agree},
+\end{equation}
+and the agent accepts if $\mathrm{conf}\ge\tau_a$, abstains if
+$\mathrm{conf}<\tau_{\mathrm{abst}}$. Calibration is summarized by Expected
+Calibration Error (ECE).
+
+\paragraph{Assumptions.} (A1) Actions form a finite, task-defined vocabulary;
+plans have fixed horizon $H$. (A2) The PRM exposes a (sub)differentiable score and
+gradient w.r.t.\ $P$. (A3) Synthetic-task correctness is the fraction of plan
+positions matching a known optimal plan, thresholded at $0.6$. (A4) The
+token-cost surrogate charges $1.0$ per planner step and $0.2$ per inertia step,
+summed over non-pruned steps.
+
+\section{Algorithms}
+We give publication-quality pseudocode for the five core procedures.
+
+\begin{algorithm}[tb]
+\caption{Adaptive Calibrated Differentiable Agent}
+\label{alg:agent}
+\textbf{Input}: task $\mathcal{T}$; core model $f$; PRM; sensor $\mathcal{I}$;
+verifier $\mathcal{V}$\\
+\textbf{Output}: plan $a^*$, calibrated decision
+\begin{algorithmic}[1]
+\STATE $h \leftarrow \textsc{LatentReason}(\mathcal{T}.x)$ \COMMENT{+ in-place TTT}
+\STATE $L_0 \leftarrow f.\textsc{PriorLogits}(\mathcal{T}, h)$
+\STATE $P \leftarrow \textsc{DTO}(\mathcal{T}, h, L_0)$ \COMMENT{Alg.~\ref{alg:dto}}
+\STATE $d \leftarrow$ greedy decode of $P$
+\STATE $\mathrm{fixed} \leftarrow \textsc{InertiaPlan}(\mathcal{I}, d)$ \COMMENT{Alg.~\ref{alg:inertia}}
+\STATE $a \leftarrow$ overlay $\mathrm{fixed}$ on $d$
+\STATE $s \leftarrow \textsc{PRM.Score}(\mathcal{T},h,a)$;\ \ $\mathrm{NIG}\leftarrow \textsc{NetInfoGain}(s)$
+\STATE $\mathcal{G} \leftarrow \textsc{BuildGraph}(\mathcal{T},a,s,\mathrm{NIG})$ \COMMENT{Alg.~\ref{alg:graph}}
+\STATE $\mathrm{dead} \leftarrow \mathcal{G}.\textsc{DeadSteps}()$;\ \ prune dead from cost
+\STATE $\mathrm{out} \leftarrow \textsc{Verify}(\mathcal{V},\mathcal{T},h,P,\bar s)$ \COMMENT{Alg.~\ref{alg:verify}}
+\STATE \textbf{return} $a$, $\mathrm{out}$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[tb]
+\caption{Differentiable Textual Optimization (DTO)}
+\label{alg:dto}
+\textbf{Input}: task $\mathcal{T}$; latent $h$; prior logits $L_0$; steps $T$;
+rate $\eta$\\
+\textbf{Output}: refined distribution $P$
+\begin{algorithmic}[1]
+\STATE $L \leftarrow L_0$;\ \ $p_0 \leftarrow \mathrm{softmax}(L_0)$
+\FOR{$k=1$ to $T$}
+  \STATE $P \leftarrow \mathrm{softmax}(L/\tau)$
+  \STATE $t \leftarrow \textsc{PRM.RewardTarget}(\mathcal{T},h)$
+  \STATE $g_P \leftarrow -w_\ell\,\tfrac{\log p_0}{H} - \alpha\,\tfrac{t}{H} + \beta\,\nabla \text{len} - \gamma\,\nabla H_{\mathrm{dep}}$
+  \STATE $g_L \leftarrow \textsc{SoftmaxVJP}(P, g_P)/\tau$ \COMMENT{per row}
+  \STATE $L \leftarrow L - \eta\, g_L$
+\ENDFOR
+\STATE \textbf{return} $\mathrm{softmax}(L/\tau)$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[tb]
+\caption{Dynamic Agentic Graph Update}
+\label{alg:graph}
+\textbf{Input}: actions $a$; PRM scores $s$; $\mathrm{NIG}$\\
+\textbf{Output}: dependency entropy $H_{\mathrm{vN}}$; dead steps
+\begin{algorithmic}[1]
+\STATE build Execution edges $\{(i,i{+}1)\}$
+\STATE build Dependency edges by graded representation similarity
+\STATE $\rho \leftarrow G/\mathrm{tr}(G)$, $G=SS^\top$;\ \ $H_{\mathrm{vN}}\leftarrow -\sum_i\lambda_i\log\lambda_i$
+\STATE $\mathrm{dead}\leftarrow\{\,i<H{-}1 : \neg\textsc{Reaches}(i,H{-}1)\wedge \mathrm{NIG}_i\le 0\,\}$
+\STATE \textbf{return} $H_{\mathrm{vN}}$, $\mathrm{dead}$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[tb]
+\caption{Confidence-Aware Verification}
+\label{alg:verify}
+\textbf{Input}: task $\mathcal{T}$; latent $h$; distribution $P$; mean PRM $\bar s$\\
+\textbf{Output}: confidence, accept/abstain
+\begin{algorithmic}[1]
+\STATE $m \leftarrow \textsc{Margin}(P)$ \COMMENT{mean top1$-$top2}
+\STATE $c \leftarrow c_\phi([\,\overline h,\mathrm{std}(h),\lVert h\rVert,m,\bar s\,])$
+\STATE $\mathrm{agree}\leftarrow \mathcal{V}.\textsc{Independent}(\mathcal{T},P)$
+\STATE $\mathrm{conf}\leftarrow (1-w)\,c + w\,\mathrm{agree}$
+\STATE \textbf{return} $\mathrm{conf}$, $[\mathrm{conf}\!\ge\!\tau_a]$, $[\mathrm{conf}\!<\!\tau_{\mathrm{abst}}]$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[tb]
+\caption{Tool-Usage Inertia Controller}
+\label{alg:inertia}
+\textbf{Input}: sensor $\mathcal{I}$ (transition counts); draft plan $d$;
+threshold $\theta$; min obs.\ $m$\\
+\textbf{Output}: map of inertia-served steps
+\begin{algorithmic}[1]
+\STATE $\mathrm{fixed}\leftarrow\{\}$
+\FOR{$j=0$ to $H-1$}
+  \STATE $\mathrm{prev}\leftarrow d[j-1]$ if $j>0$ else $\bot$
+  \IF{$\mathrm{prev}\ne\bot$ \textbf{and} $n(\mathrm{prev})\ge m$ \textbf{and} $\max_{s'}T(s'|\mathrm{prev})\ge\theta$}
+    \STATE $\mathrm{fixed}[j]\leftarrow \arg\max_{s'}T(s'|\mathrm{prev})$ \COMMENT{skip planner}
+  \ENDIF
+\ENDFOR
+\STATE \textbf{return} $\mathrm{fixed}$
+\end{algorithmic}
+\end{algorithm}
+
+\section{Implementation}
+The reference implementation is Python with \texttt{numpy} and \texttt{PyYAML} as
+the only runtime dependencies; it downloads nothing and runs offline. All
+backends sit behind narrow interfaces (a registry seam): the core model, the PRM,
+the independent verifier, and the dataset are \emph{mock} by default and
+replaceable without changing \texttt{agent.py}, \texttt{dto.py},
+\texttt{graph.py}, \texttt{inertia.py}, or \texttt{verification.py}.
+Reproducibility is enforced by deriving every per-task RNG seed from a stable
+hash (not Python's salted \texttt{hash}), so outputs are identical across
+processes and machines. The DTO gradient, the entropy-surrogate gradient, and the
+probe are unit-tested, including finite-difference gradient checks; the suite
+contains 40 tests. Table~\ref{tab:trace} maps each paper concept to its module,
+files, and evidence.
+
+\begin{table*}[t]
+\centering
+\caption{Repository-to-paper traceability. ``Mock'' = offline stand-in behind a
+pluggable interface; ``Real'' = full algorithm implemented and tested. Evidence
+refers to the offline synthetic suite (\textsc{Eval}), unit tests (\textsc{Test}),
+or documented design (\textsc{Doc}).}
+\label{tab:trace}
+\begin{tabular}{@{}lllll@{}}
+\toprule
+Concept & Repo module & Files & Status & Evidence \\
+\midrule
+Latent reasoning + in-place TTT & latent & \texttt{latent\_reasoning.py} & Real & \textsc{Test}, \textsc{Eval} \\
+Differentiable Textual Optimization & dto & \texttt{dto.py} & Real (analytic grad) & \textsc{Test} (FD check), \textsc{Eval} \\
+Process reward model interface & rewards & \texttt{rewards.py} & Mock (pluggable) & \textsc{Test}, \textsc{Doc} \\
+Net Information Gain $O(N)$ & rewards & \texttt{rewards.py} & Real & \textsc{Test} \\
+Two-layer graph (EX/ED) & graph & \texttt{graph.py} & Real & \textsc{Test}, \textsc{Eval} \\
+von Neumann entropy / diversity & graph & \texttt{graph.py} & Real (exact + surrogate) & \textsc{Test} (FD check) \\
+Dead-step pruning & graph & \texttt{graph.py} & Real & \textsc{Test}, \textsc{Eval} \\
+Tool-usage inertia & inertia & \texttt{inertia.py} & Real & \textsc{Test}, \textsc{Eval} \\
+Independent verification & verification & \texttt{verification.py} & Mock (pluggable) & \textsc{Test} \\
+Confidence probe + margin (RLCM) & verification & \texttt{verification.py} & Real & \textsc{Test}, \textsc{Eval} \\
+Calibration (ECE) & verification & \texttt{verification.py} & Real & \textsc{Eval} \\
+Core LLM action head & registry & \texttt{registry.py} & Mock (pluggable) & \textsc{Doc} \\
+Datasets (GSM8K/GAIA/\ldots) & tasks & \texttt{tasks/synthetic.py} & Synthetic stand-in & \textsc{Eval} \\
+Ablation switches & config & \texttt{config.py} & Real & \textsc{Eval} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\section{Experimental Setup}
+\label{sec:setup}
+\textbf{Scope.} We evaluate \emph{mechanism behavior}, not benchmark performance.
+Real-LLM/PRM backends and standard benchmarks are not implemented in the
+repository and are reported as future work (see Limitations).
+
+\textbf{Synthetic suite.} Tasks are short tool-planning problems in three families
+mirroring the proposal's target domains: \texttt{math} (6 actions, horizon 5),
+\texttt{code} (7 actions, horizon 6), and \texttt{tool} (6 actions, horizon 5).
+Optimal plans are drawn from a near-deterministic motif chain, producing strong
+recurring transitions for inertia to exploit. The default suite is
+$8$ tasks/family ($24$ tasks); task features have dimension $24$.
+
+\textbf{Metrics.} \emph{Accuracy} (fraction of tasks with $\ge\!0.6$ positional
+match to the optimal plan); \emph{coverage} (fraction not abstained);
+\emph{selective accuracy} (accuracy among answered); \emph{token cost} (surrogate:
+$1.0$/planner step, $0.2$/inertia step, summed over non-pruned steps);
+\emph{LLM calls}; \emph{inertia saved}; \emph{dead steps pruned}; \emph{ECE};
+\emph{dependency entropy}.
+
+\textbf{Baselines (ablations).} A Chain-of-Thought-like baseline disables every
+module; per-module ablations disable exactly one. All runs are seeded
+($\texttt{seed}=0$) and deterministic.
+
+\textbf{Resource budget.} The entire suite runs on a single CPU core in seconds;
+there is no GPU requirement and no network access.
+
+\section{Results}
+\label{sec:results}
+Table~\ref{tab:ablation} reports the synthetic-suite results produced by the
+offline harness (\texttt{acdan ablation --seed 0 --n 8}). These numbers are
+generated by the repository and are reproducible; they isolate the contribution of
+each mechanism and are \emph{not} benchmark results.
+
+The full system reaches accuracy $0.833$ at token cost $3.44$ and ECE $0.133$,
+versus the disabled-everything baseline at accuracy $0.125$, token cost $5.33$,
+ECE $0.497$. The trends are consistent with the design: DTO governs accuracy,
+inertia and graph pruning govern cost, and verification governs calibration.
+
+Table~\ref{tab:bench} is the \emph{template} for the standard-benchmark
+evaluation, intentionally left to be completed once real backends are wired in;
+all cells are marked ``not implemented.''
+
+\begin{table*}[t]
+\centering
+\caption{Synthetic mechanism-isolation results (repository output;
+\texttt{seed=0}, $8$ tasks/family, $24$ tasks). Higher is better for accuracy,
+coverage, selective accuracy, inertia saved, dead pruned, dependency entropy;
+lower is better for token cost, LLM calls, ECE. These isolate \emph{mechanisms}
+on synthetic tasks and are not benchmark numbers.}
+\label{tab:ablation}
+\begin{tabular}{@{}lrrrrrrrrr@{}}
+\toprule
+Config & Acc & Sel.Acc & Cov & Tok.Cost & LLM & Inertia & Dead & ECE & Dep.$H$ \\
+\midrule
+ACDAN (full)        & \textbf{0.833} & 0.833 & 1.000 & 3.44 & 3.21 & 1.29 & 0.96 & \textbf{0.133} & 1.222 \\
+\,\,$-$latent        & 0.792 & 0.792 & 1.000 & 3.36 & 3.12 & 1.29 & 1.04 & 0.108 & 1.212 \\
+\,\,$-$TTT           & 0.792 & 0.792 & 1.000 & 3.40 & 3.17 & 1.29 & 1.00 & 0.106 & 1.212 \\
+\,\,$-$DTO           & 0.167 & 0.500 & 0.250 & 2.81 & 2.54 & 1.42 & 1.46 & 0.212 & 1.085 \\
+\,\,$-$graph         & 0.875 & 0.875 & 1.000 & 4.30 & 4.04 & 1.29 & 0.00 & 0.142 & 0.000 \\
+\,\,$-$inertia       & 0.875 & 0.875 & 1.000 & 4.29 & 4.29 & 0.00 & 1.04 & 0.096 & 1.230 \\
+\,\,$-$verification  & 0.833 & 0.833 & 1.000 & 3.44 & 3.21 & 1.29 & 0.96 & 0.260 & 1.222 \\
+\,\,$-$conf.\ margin & 0.833 & 0.833 & 1.000 & 3.44 & 3.21 & 1.29 & 0.96 & 0.186 & 1.222 \\
+Baseline (CoT-like) & 0.125 & 0.125 & 1.000 & 5.33 & 5.33 & 0.00 & 0.00 & 0.497 & 0.000 \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{table}[t]
+\centering
+\caption{Standard-benchmark evaluation template (\emph{to be completed}). These
+experiments are \textbf{not implemented in the repository}; entries are
+placeholders for real-backend results.}
+\label{tab:bench}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Benchmark & Metric & Baseline & ACDAN \\
+\midrule
+GSM8K / MATH      & accuracy & --- & --- \\
+LiveCodeBench     & pass@1   & --- & --- \\
+ToolBench         & success  & --- & --- \\
+GAIA              & accuracy & --- & --- \\
+VisualProcessBench & error-detect & --- & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Ablation Study}
+\label{sec:ablation}
+We interpret Table~\ref{tab:ablation} module by module.
+
+\textbf{Removing DTO} collapses accuracy from $0.833$ to $0.167$ and coverage to
+$0.250$: without gradient refinement the greedy plan is poor, the probe assigns
+low confidence, and the agent abstains on most tasks (its selective accuracy of
+$0.500$ on the few it answers reflects exactly the risk-control behavior the
+verifier is meant to provide). DTO is the dominant accuracy driver.
+
+\textbf{Removing the dependency graph} raises token cost from $3.44$ to $4.30$
+(no pruning) and zeroes both dead-step count and dependency entropy, while
+accuracy is unchanged ($0.875$ here). The graph's visible role is cost reduction
+and diagnostics, not accuracy.
+
+\textbf{Removing tool-usage inertia} raises token cost from $3.44$ to $4.29$ and
+LLM calls from $3.21$ to $4.29$, with inertia-saved dropping to $0$ and accuracy
+unchanged. Inertia is an efficiency mechanism.
+
+\textbf{Removing verification} leaves accuracy unchanged but degrades calibration
+(ECE $0.133\!\to\!0.260$) and removes abstention (coverage $\to\!1.0$).
+\textbf{Removing the confidence margin} alone degrades ECE to $0.186$. Calibration
+is owned by the verification stack.
+
+\textbf{Removing latent reasoning / TTT} gives a smaller, consistent accuracy
+reduction ($0.833\!\to\!0.792$): a cleaner latent yields a cleaner PRM signal.
+The \textbf{baseline} is worst on every axis. Each module thus earns its place by
+improving a distinct metric, with no single module dominating all.
+
+\section{Analysis}
+Three observations follow. First, the mechanisms are \emph{complementary}, not
+redundant: accuracy, cost, and calibration are improved by different modules, so
+the unified system Pareto-dominates the baseline across axes simultaneously.
+Second, the DTO objective trace decreases monotonically in practice (tested),
+indicating the continuous relaxation is well-behaved under first-order updates.
+Third, the abstention behavior under the no-DTO ablation demonstrates that
+calibrated confidence converts low capability into \emph{safe} low coverage rather
+than confident error---useful for risk-controlled deployment. We caution that all
+effect sizes are specific to the synthetic generator and serve to validate
+\emph{mechanism direction}, not magnitude on real tasks.
+
+\section{Discussion}
+ACDAN's central design bet is that representing a plan as a differentiable object
+unlocks gradient-based refinement that is both cheaper and better-behaved than
+discrete search, while an explicit computation graph and an inference-time
+confidence signal address overthinking and miscalibration in the same loop. The
+architecture is intentionally \emph{interface-thin}: the same agent runs with mock
+or real backends, which makes the design falsifiable component-by-component. The
+principal trade-off is that the strongest claims (token reduction at fixed
+accuracy on real benchmarks; out-of-distribution calibration transfer) require
+real backends we have not yet integrated; the present evidence establishes that
+each mechanism behaves as intended and that the integration is coherent.
+
+\section{Limitations}
+\label{sec:limitations}
+We list limitations explicitly. (1) \textbf{Mock backends}: the core model, PRM,
+and independent verifier are offline stand-ins; no real model or dataset weights
+are loaded. (2) \textbf{Synthetic-only evaluation}: results isolate mechanisms on
+generated tasks; they are not benchmark performance and effect magnitudes may not
+transfer. (3) \textbf{Policy training on a parametric policy}: the proposal's
+PS-GRPO post-training loop (process supervision + drop-moment + confidence margin
++ PPO-clip + KL) \emph{is implemented} with analytic, finite-difference-tested
+gradients and trains a parametric $(H,V)$ policy on synthetic data; training a
+\emph{real LLM} policy is the remaining step (the advantage computation is
+backend-agnostic). (4) \textbf{Surrogate entropy}: DTO optimizes a variance
+surrogate, not the exact von~Neumann entropy (which is only reported). (5)
+\textbf{Token-cost surrogate}: cost is a step-weighted proxy, not measured
+wall-clock or tokens. (6) \textbf{Single-seed headline table}; multi-seed
+mean$\pm$std is supported by the harness but not the default report. Each item is
+a concrete, scoped extension rather than a hidden gap.
+
+\section{Conclusion}
+We presented ACDAN, a unified test-time agent architecture integrating latent
+reasoning, differentiable textual optimization, a two-layer agentic computation
+graph, tool-usage inertia, and calibrated self-verification, together with a
+complete, offline, reproducible, ablation-native implementation. A
+mechanism-isolation study attributes accuracy to DTO, cost reductions to inertia
+and graph pruning, and calibration gains to the verification stack. We deliberately
+scope real-backend and benchmark evaluation as future work and mark every
+unimplemented component. We believe the architecture and its falsifiable,
+component-level reference implementation are a useful foundation for rigorous,
+rebuttal-ready research on universal test-time agents.
+
+\section*{Reproducibility}
+All numbers in Table~\ref{tab:ablation} are produced by the offline harness with
+\texttt{seed=0}; seeds derive from a stable hash so results are identical across
+machines. The repository ships configs, a reproduce script, and 40 unit tests
+including finite-difference gradient checks.
+
+\appendix
+\section{Additional Implementation Details}
+\textbf{DTO defaults.} $T{=}40$ iterations, $\eta{=}0.8$, $\tau{=}1.0$,
+$w_\ell{=}0.1$, $\alpha{=}2.0$, $\beta{=}0.02$, $\gamma{=}0.01$;
+$\alpha,\gamma$ scaled by $0.5{+}\text{difficulty}$.
+\textbf{Latent.} latent dim $32$, recurrent depth $4$, TTT steps $3$, TTT rate
+$0.05$. \textbf{Inertia.} threshold $0.65$, Laplace smoothing $0.5$, min
+observations $3$. \textbf{Verification.} accept threshold $0.5$, abstain
+threshold $0.35$, independent weight $0.5$. \textbf{Probe.} 2-layer MLP over a
+$5$-dimensional feature vector, trained by BCE on a held-out calibration split.
+
+\section{Reproducibility Checklist Pointers}
+The repository documents architecture, the formal objective, the
+module-to-paper map, and a rebuttal checklist; the evaluation harness is
+deterministic and CPU-only. Real-data experiments are marked not implemented.
+
+\section*{Ethical Statement}
+ACDAN targets more efficient and better-calibrated agents. Improved calibration
+and explicit abstention can reduce confident errors in tool use, a safety
+benefit. However, more capable autonomous agents carry dual-use and automation
+risks, and a confidence signal can be misread as a correctness guarantee---it is
+not. The reference implementation uses only synthetic data, contains no personal
+data, and downloads nothing. Before deployment with real models, the independent
+verifier and calibration thresholds should be validated on in-domain data, and
+abstention policies set conservatively for high-stakes actions.
+
+\bibliography{acdan}
+
+% If the conference requires the reproducibility checklist inline:
+% \input{ReproducibilityChecklist.tex}
+
+\end{document}

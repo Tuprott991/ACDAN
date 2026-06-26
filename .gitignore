@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Tooling
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Experiment artifacts (reproducible from configs; not committed)
+results/
+runs/
+outputs/
+*.log
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Large external assets that this repo deliberately never downloads.
+# (Adapters in src/acdan/registry.py expect these paths but ship empty.)
+data/raw/
+data/external/
+checkpoints/
+*.bin
+*.safetensors
+*.pt
+*.gguf

@@ -1,0 +1,6 @@
+# Ablation: disable Tool Usage Inertia (always "call the LLM" to plan).
+# Expected effect: accuracy unchanged, but higher token cost / more LLM calls.
+name: no_inertia
+seed: 0
+ablation:
+  inertial_sensing: false

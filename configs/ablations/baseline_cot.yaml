@@ -1,0 +1,13 @@
+# Baseline: every ACDAN module disabled (Chain-of-Thought-like single path).
+# Corresponds to the leftmost column of the comparison table in the proposal.
+name: baseline_cot
+seed: 0
+success_threshold: 0.6
+ablation:
+  latent_reasoning: false
+  in_place_ttt: false
+  dto: false
+  dependency_graph: false
+  inertial_sensing: false
+  verification: false
+  confidence_margin: false

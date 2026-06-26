@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "acdan"
+version = "0.1.0"
+description = "Adaptive Calibrated Differentiable Agentic Networks (ACDAN): a reproducible, offline research reference implementation."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "ACDAN Authors" }]
+keywords = [
+    "agentic-ai",
+    "test-time-scaling",
+    "differentiable-optimization",
+    "process-reward-model",
+    "confidence-calibration",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+# Intentionally minimal runtime dependencies. Everything runs offline.
+dependencies = [
+    "numpy>=1.24",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+# Install on the experiment VM only (GPU). Heavy; imported lazily by acdan.backends.
+gpu = [
+    "vllm>=0.6",
+    "torch>=2.3",
+    "transformers>=4.44",
+    "sentence-transformers>=3.0",
+]
+# Optional: Claude API roles (independent verifier / judge).
+api = [
+    "anthropic>=0.40",
+]
+
+[project.scripts]
+acdan = "acdan.cli:main"
+
+[project.urls]
+Homepage = "https://example.org/acdan"
+Documentation = "https://example.org/acdan/docs"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+acdan = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -1,0 +1,7 @@
+# Ablation: disable latent-space reasoning + in-place TTT (shallow passthrough).
+# Expected effect: a modest accuracy drop (cleaner latent -> cleaner PRM signal).
+name: no_latent
+seed: 0
+ablation:
+  latent_reasoning: false
+  in_place_ttt: false

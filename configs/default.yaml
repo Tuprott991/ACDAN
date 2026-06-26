@@ -1,0 +1,41 @@
+# ACDAN default configuration (full architecture, all modules enabled).
+# Every field maps to a symbol documented in docs/math.md and
+# docs/module_to_paper_mapping.md. Load with:  acdan eval --config configs/default.yaml
+name: default
+seed: 0
+success_threshold: 0.6        # fraction of plan positions that must match optimal
+
+ablation:                     # toggle any module on/off (see configs/ablations/)
+  latent_reasoning: true
+  in_place_ttt: true
+  dto: true
+  dependency_graph: true
+  inertial_sensing: true
+  verification: true
+  confidence_margin: true
+
+latent:                       # latent-space reasoning + in-place TTT
+  latent_dim: 32
+  recurrent_depth: 4          # unrolled recurrent-block steps (reasoning depth)
+  ttt_steps: 3                # in-place test-time training updates
+  ttt_lr: 0.05
+
+dto:                          # Differentiable Textual Optimization
+  iters: 40                   # T: first-order logit updates
+  lr: 0.8                     # eta: test-time learning rate
+  alpha_reward: 2.0           # weight on PRM process reward
+  beta_length: 0.02           # length / repetition penalty (anti-overthinking)
+  gamma_entropy: 0.01         # von Neumann entropy bonus (path diversity)
+  likelihood_weight: 0.1      # core-model log-likelihood prior
+  temperature: 1.0
+
+inertia:                      # Tool Usage Inertia / Inertial Sensing
+  threshold: 0.65             # high-inertia activation threshold
+  smoothing: 0.5              # Laplace smoothing of transition counts
+  min_observations: 3         # min observed transitions before trusting inertia
+
+verification:                 # self-verification & confidence calibration (RLCM)
+  accept_threshold: 0.5
+  abstain_threshold: 0.35
+  independent_weight: 0.5     # blend of independent verifier vs. probe
+  margin_floor: 0.05
