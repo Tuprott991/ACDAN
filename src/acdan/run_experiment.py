@@ -84,12 +84,18 @@ def _to_task(raw: RawTask, features: np.ndarray) -> Task:
         idx = [vocab.index(g) for g in raw.gold if g in vocab]
         if idx:
             optimal = tuple(idx)
+    metadata = dict(raw.metadata)
+    metadata.update({
+        "prompt": raw.prompt,
+        "gold": raw.gold,
+        "family": raw.family,
+        "action_templates": raw.action_templates,
+    })
     return Task(
         task_id=raw.task_id, prompt_features=np.asarray(features, dtype=np.float64),
         vocab=tuple(vocab), horizon=raw.horizon, difficulty=raw.difficulty,
         optimal_plan=optimal,
-        metadata={"prompt": raw.prompt, "gold": raw.gold, "family": raw.family,
-                  "action_templates": raw.action_templates},
+        metadata=metadata,
     )
 
 
@@ -191,6 +197,19 @@ def run(args: argparse.Namespace) -> dict:
     n = len(rows)
     correct = np.array([r["correct"] for r in rows], dtype=bool)
     answered = ~np.array([r["abstained"] for r in rows], dtype=bool)
+    answer_tasks = [t for t in tasks if t.horizon == 1 and t.vocab_size > 0]
+    oracle_acc = None
+    first_acc = None
+    last_acc = None
+    if args.dataset in {"gsm8k", "math", "jsonl"} and answer_tasks:
+        oracle_acc = float(np.mean([
+            any(bool(checker(t, [i])) for i in range(t.vocab_size))
+            for t in answer_tasks
+        ]))
+        first_acc = float(np.mean([bool(checker(t, [0])) for t in answer_tasks]))
+        last_acc = float(np.mean([
+            bool(checker(t, [t.vocab_size - 1])) for t in answer_tasks
+        ]))
     summary = {
         "method": args.method, "dataset": args.dataset, "policy": args.policy,
         "policy_model": args.policy_model, "prm": args.prm, "seed": args.seed,
@@ -206,6 +225,12 @@ def run(args: argparse.Namespace) -> dict:
         "total_real_prompt_tokens": int(sum(r["real_prompt_tokens"] for r in rows)),
         "mean_token_surrogate": float(np.mean([r["token_surrogate"] for r in rows])) if n else 0.0,
     }
+    if answer_tasks:
+        summary["mean_vocab_size"] = float(np.mean([t.vocab_size for t in answer_tasks]))
+    if oracle_acc is not None:
+        summary["oracle_candidate_accuracy"] = oracle_acc
+        summary["always_first_accuracy"] = first_acc
+        summary["always_last_accuracy"] = last_acc
     out = {"summary": summary, "per_task": rows if args.save_per_task else []}
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)

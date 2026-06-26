@@ -13,6 +13,7 @@ only.
 
 from __future__ import annotations
 
+import hashlib
 from typing import List, Optional, Sequence
 
 import numpy as np
@@ -42,6 +43,8 @@ class LLMAsProcessReward:
         self.sharpness = sharpness
         self._yes = self._ids(yes_tokens)
         self._no = self._ids(no_tokens)
+        self._reward_cache: dict[tuple[str, str, int, int], np.ndarray] = {}
+        self._target_cache: dict[tuple[str, str, int, int], np.ndarray] = {}
         self.n_prompt_tokens = 0
 
     def _ids(self, toks: Sequence[str]) -> List[int]:
@@ -70,26 +73,89 @@ class LLMAsProcessReward:
 
     # ------------------------------------------------------ reward field
 
-    def step_reward_matrix(self, task: Task, latent: np.ndarray) -> np.ndarray:
-        H, V = task.horizon, task.vocab_size
+    def _cache_key(self, task: Task, latent: np.ndarray) -> tuple[str, str, int, int]:
+        """Stable key for LLM reward calls that do not depend on soft probs."""
+        arr = np.ascontiguousarray(latent, dtype=np.float64)
+        latent_digest = hashlib.blake2b(arr.view(np.uint8), digest_size=12).hexdigest()
+        templates = task.metadata.get("action_templates", {}) or {}
+        task_payload = repr((task.task_id, task.vocab, templates)).encode("utf-8")
+        task_digest = hashlib.blake2b(task_payload, digest_size=12).hexdigest()
+        return (task_digest, latent_digest, task.horizon, task.vocab_size)
+
+    def _reward_prompt(self, task: Task, h: int, v: int) -> str:
         prompt = str(task.metadata.get("prompt", ""))
+        family = str(task.metadata.get("family", ""))
+        action = str(task.vocab[v])
+        if family in {"gsm8k", "math"}:
+            solutions = task.metadata.get("candidate_solutions", {}) or {}
+            counts = task.metadata.get("candidate_counts", {}) or {}
+            solution = str(solutions.get(action, "")).strip()
+            count = counts.get(action)
+            count_line = f"\nCandidate sample count: {count}" if count is not None else ""
+            solution_block = (
+                f"\nCandidate reasoning:\n{solution}\n" if solution else "\n"
+            )
+            return (
+                "You are verifying a math answer. Recompute the problem and "
+                "judge only whether the proposed final answer is correct.\n\n"
+                f"Problem:\n{prompt}\n\n"
+                f"Proposed final answer: {action}"
+                f"{count_line}"
+                f"{solution_block}"
+                "Is the proposed final answer correct? Answer yes or no.\nAnswer:"
+            )
+        return (
+            f"{prompt}\nProposed step {h + 1}: {action}\n"
+            f"Is this step correct and useful? Answer yes or no.\nAnswer:"
+        )
+
+    def _self_consistency_bonus(self, task: Task) -> np.ndarray:
+        family = str(task.metadata.get("family", ""))
+        if family not in {"gsm8k", "math"}:
+            return np.zeros((task.horizon, task.vocab_size), dtype=np.float64)
+
+        counts = task.metadata.get("candidate_counts", {}) or {}
+        vals = np.asarray(
+            [float(counts.get(str(name), 1.0)) for name in task.vocab],
+            dtype=np.float64,
+        )
+        if vals.size == 0 or float(vals.max()) <= float(vals.min()):
+            return np.zeros((task.horizon, task.vocab_size), dtype=np.float64)
+        z = np.log1p(vals)
+        z = (z - float(z.mean())) / (float(z.std()) + 1e-9)
+        z = np.clip(z, -2.0, 2.0)
+        return 0.35 * np.tile(z, (task.horizon, 1))
+
+    def step_reward_matrix(self, task: Task, latent: np.ndarray) -> np.ndarray:
+        key = self._cache_key(task, latent)
+        cached = self._reward_cache.get(key)
+        if cached is not None:
+            return cached.copy()
+
+        H, V = task.horizon, task.vocab_size
         prompts: List[str] = []
         for h in range(H):
             for v in range(V):
-                prompts.append(
-                    f"{prompt}\nProposed step {h + 1}: {task.vocab[v]}\n"
-                    f"Is this step correct and useful? Answer yes or no.\nAnswer:"
-                )
+                prompts.append(self._reward_prompt(task, h, v))
         p = np.asarray(self._p_yes(prompts), dtype=np.float64).reshape(H, V)
-        # map [0,1] P(yes) to a centered reward field in [-1, 1]
-        return 2.0 * p - 1.0
+        # map [0,1] P(yes) to a centered reward field and add cheap evidence.
+        R = 2.0 * p - 1.0 + self._self_consistency_bonus(task)
+        self._reward_cache[key] = R.copy()
+        return R
 
     def _reward_target(self, task: Task, latent: np.ndarray) -> np.ndarray:
+        key = self._cache_key(task, latent)
+        cached = self._target_cache.get(key)
+        if cached is not None:
+            return cached.copy()
+
         R = self.step_reward_matrix(task, latent)
         z = self.sharpness * R
         z = z - z.max(axis=1, keepdims=True)
         e = np.exp(z)
-        return e / e.sum(axis=1, keepdims=True)
+        target = e / e.sum(axis=1, keepdims=True)
+        self._target_cache[key] = target.copy()
+        return target
 
     # -------------------------------------------------- ProcessRewardModel
 

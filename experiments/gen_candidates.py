@@ -13,11 +13,18 @@ Usage (on the VM):
 
 Input JSONL lines: {"question": "...", "answer": "42"}
 Output JSONL lines: {"question": ..., "candidates": ["...","..."], "answer": "42"}
+
+The output also preserves lightweight evidence for the selector:
+``candidate_solutions`` keeps the first sampled solution for each unique final
+answer, ``candidate_counts`` keeps self-consistency counts, and
+``candidate_first_indices`` keeps generation order. The dataset adapter remains
+backward-compatible with older files that only have ``candidates``.
 """
 
 from __future__ import annotations
 
 import argparse
+from collections import OrderedDict
 import json
 import re
 
@@ -59,10 +66,35 @@ def main() -> None:
 
     with open(args.out, "w", encoding="utf-8") as fh:
         for r, out in zip(rows, outs):
-            cands = sorted({extract_answer(o.text) for o in out.outputs})
+            grouped = OrderedDict()
+            for idx, sample in enumerate(out.outputs):
+                solution = sample.text.strip()
+                answer = extract_answer(solution)
+                if answer not in grouped:
+                    grouped[answer] = {
+                        "solution": solution,
+                        "count": 0,
+                        "first_index": idx,
+                    }
+                grouped[answer]["count"] += 1
+
+            ordered = sorted(
+                grouped.items(),
+                key=lambda item: (-item[1]["count"], item[1]["first_index"]),
+            )
+            cands = [answer for answer, _ in ordered]
             fh.write(json.dumps({
                 "question": r["question"],
                 "candidates": cands,
+                "candidate_solutions": {
+                    answer: meta["solution"] for answer, meta in ordered
+                },
+                "candidate_counts": {
+                    answer: meta["count"] for answer, meta in ordered
+                },
+                "candidate_first_indices": {
+                    answer: meta["first_index"] for answer, meta in ordered
+                },
                 "answer": str(r["answer"]),
             }) + "\n")
     print(f"wrote {len(rows)} tasks -> {args.out}")

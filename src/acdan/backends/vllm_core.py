@@ -78,14 +78,25 @@ class VLLMCoreModel:
         H, V = task.horizon, task.vocab_size
         prompt = str(task.metadata.get("prompt", ""))
         templates = task.metadata.get("action_templates", {}) or {}
+        family = str(task.metadata.get("family", ""))
         contexts: List[str] = []
         conts: List[str] = []
         for h in range(H):
-            ctx = f"{prompt}\nStep {h + 1}: "
+            if family in {"gsm8k", "math"}:
+                ctx = (
+                    "Solve the math problem and evaluate the proposed answer.\n\n"
+                    f"Problem:\n{prompt}\n\n"
+                    "Plausible correct candidate:\n"
+                )
+            else:
+                ctx = f"{prompt}\nStep {h + 1}: "
             for v in range(V):
                 name = task.vocab[v]
                 contexts.append(ctx)
-                conts.append(str(templates.get(name, name)))
+                if family in {"gsm8k", "math"}:
+                    conts.append(str(templates.get(name, f"Final answer: {name}")))
+                else:
+                    conts.append(str(templates.get(name, name)))
         scores = self._score_continuations(contexts, conts)
         self.n_score_batches += 1
         return np.asarray(scores, dtype=np.float64).reshape(H, V)
