@@ -162,7 +162,7 @@ for ABL in no_dto no_verification no_latent no_ttt; do
 done
 ```
 
-Repeat the same block for `math500`, `aime2025`, and later `omni_math` once
+Repeat the same block for `math500`, `aime2025`, and later `omni_math` once1
 candidate files exist.
 
 ### 3b. BFCL / Tool Use
@@ -172,7 +172,7 @@ or omit it; the runner no longer fits from evaluation gold.
 
 ```bash
 M=Qwen/Qwen2.5-7B-Instruct; TAG=qwen7b
-TRAIN=data/bfcl_dev.jsonl
+TRAIN=data/bfcl_dev.jsonl 
 TEST=data/bfcl_full.jsonl
 
 for METHOD in acdan bon asc sc cot; do
