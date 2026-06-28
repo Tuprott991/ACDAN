@@ -38,6 +38,7 @@ class BFCLDataset:
                 tools = [str(t) for t in d["tools"]]
                 gold = d["gold"]
                 gold = [gold] if isinstance(gold, str) else [str(g) for g in gold]
+                gold_calls = d.get("gold_calls", [])
                 yield RawTask(
                     task_id=d.get("task_id", f"bfcl-{i:05d}"),
                     prompt=d["prompt"],
@@ -47,7 +48,12 @@ class BFCLDataset:
                     family="bfcl",
                     difficulty=float(d.get("difficulty", 0.5)),
                     action_templates=d.get("action_templates", {}) or {},
-                    metadata={"n_tools": len(tools)},
+                    metadata={
+                        "n_tools": len(tools),
+                        "gold_calls": gold_calls,
+                        "source": d.get("source"),
+                        "category": d.get("category"),
+                    },
                 )
                 n += 1
                 if self.limit and n >= self.limit:

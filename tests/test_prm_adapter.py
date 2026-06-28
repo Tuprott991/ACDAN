@@ -55,7 +55,25 @@ def test_llm_prm_math_bonus_uses_candidate_counts():
             "prompt": "What is 2+2?",
             "family": "gsm8k",
             "candidate_counts": {"wrong": 1, "right": 4},
+            "use_prm_count_bonus": True,
         },
     )
     R = prm.step_reward_matrix(task, np.ones(4))
     assert R[0, 1] > R[0, 0]
+
+
+def test_llm_prm_math_bonus_is_off_by_default():
+    prm = CountingLLMPRM()
+    task = Task(
+        task_id="math-cache-test-default",
+        prompt_features=np.zeros(4),
+        vocab=("wrong", "right"),
+        horizon=1,
+        metadata={
+            "prompt": "What is 2+2?",
+            "family": "gsm8k",
+            "candidate_counts": {"wrong": 1, "right": 4},
+        },
+    )
+    R = prm.step_reward_matrix(task, np.ones(4))
+    assert np.isclose(R[0, 1], R[0, 0])

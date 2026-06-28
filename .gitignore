@@ -42,3 +42,4 @@ checkpoints/
 *.safetensors
 *.pt
 *.gguf
+.env

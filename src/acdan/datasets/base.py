@@ -28,6 +28,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from acdan.datasets.math_answer import answers_equivalent
 from acdan.types import Task
 
 
@@ -116,7 +117,7 @@ def build_dataset(kind: str, path: Optional[str] = None, limit: Optional[int] = 
         return JSONLRawDataset(path, family="jsonl", limit=limit)
     if kind in {"gsm8k", "math"}:
         from acdan.datasets.gsm8k import GSM8KDataset
-        return GSM8KDataset(path, limit=limit)
+        return GSM8KDataset(path, limit=limit, **kwargs)
     if kind in {"bfcl", "toolbench"}:
         from acdan.datasets.bfcl import BFCLDataset
         return BFCLDataset(path, limit=limit)
@@ -134,15 +135,11 @@ def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", str(s).strip().lower())
 
 
-def _extract_number(s: str) -> Optional[str]:
-    m = re.findall(r"-?\d+(?:\.\d+)?", str(s).replace(",", ""))
-    return m[-1] if m else None
-
-
 def outcome_exact(task: Task, actions: Sequence[int]) -> bool:
     """Answer-selection: the chosen option (step 0) equals the gold answer.
 
-    Compares normalised strings and, when both look numeric, the last number.
+    Compares normalised extracted answers and numeric values only when the
+    extracted answers themselves are numeric.
     """
     if not actions:
         return False
@@ -150,8 +147,7 @@ def outcome_exact(task: Task, actions: Sequence[int]) -> bool:
     gold = str(task.metadata.get("gold", ""))
     if _norm(pred) == _norm(gold):
         return True
-    pn, gn = _extract_number(pred), _extract_number(gold)
-    return pn is not None and pn == gn
+    return answers_equivalent(pred, gold)
 
 
 def outcome_tool_sequence(task: Task, actions: Sequence[int]) -> bool:

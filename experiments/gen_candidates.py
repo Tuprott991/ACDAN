@@ -26,12 +26,13 @@ from __future__ import annotations
 import argparse
 from collections import OrderedDict
 import json
-import re
+import random
+
+from acdan.datasets.math_answer import extract_final_answer
 
 
 def extract_answer(text: str) -> str:
-    m = re.findall(r"-?\d+(?:\.\d+)?", text.replace(",", ""))
-    return m[-1] if m else text.strip()[-32:]
+    return extract_final_answer(text)
 
 
 def main() -> None:
@@ -43,6 +44,16 @@ def main() -> None:
     ap.add_argument("--temperature", type=float, default=0.8)
     ap.add_argument("--max-tokens", type=int, default=512)
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument(
+        "--order",
+        choices=["sample", "plurality", "shuffle"],
+        default="sample",
+        help=(
+            "Candidate order. 'sample' preserves first-seen order; 'plurality' "
+            "sorts by self-consistency count; 'shuffle' is a seeded neutral order."
+        ),
+    )
+    ap.add_argument("--shuffle-seed", type=int, default=0)
     args = ap.parse_args()
 
     from vllm import LLM, SamplingParams  # lazy / GPU
@@ -65,7 +76,7 @@ def main() -> None:
     outs = llm.generate(prompts, sp)
 
     with open(args.out, "w", encoding="utf-8") as fh:
-        for r, out in zip(rows, outs):
+        for row_idx, (r, out) in enumerate(zip(rows, outs)):
             grouped = OrderedDict()
             for idx, sample in enumerate(out.outputs):
                 solution = sample.text.strip()
@@ -78,14 +89,21 @@ def main() -> None:
                     }
                 grouped[answer]["count"] += 1
 
-            ordered = sorted(
-                grouped.items(),
-                key=lambda item: (-item[1]["count"], item[1]["first_index"]),
-            )
+            ordered = sorted(grouped.items(), key=lambda item: item[1]["first_index"])
+            if args.order == "plurality":
+                ordered = sorted(
+                    grouped.items(),
+                    key=lambda item: (-item[1]["count"], item[1]["first_index"]),
+                )
+            elif args.order == "shuffle":
+                ordered = list(ordered)
+                rng = random.Random(args.shuffle_seed + row_idx)
+                rng.shuffle(ordered)
             cands = [answer for answer, _ in ordered]
             fh.write(json.dumps({
                 "question": r["question"],
                 "candidates": cands,
+                "candidate_order": args.order,
                 "candidate_solutions": {
                     answer: meta["solution"] for answer, meta in ordered
                 },

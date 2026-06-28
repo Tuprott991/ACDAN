@@ -165,8 +165,14 @@ class ACDANAgent:
         # 6) Self-verification & confidence calibration.
         mean_prm = float(np.mean(prm_scores)) if prm_scores else 0.0
         if ab.verification:
+            executed_plan = Plan(
+                actions=actions,
+                logits=plan.logits,
+                dto_steps=plan.dto_steps,
+                objective_trace=plan.objective_trace,
+            )
             verification = self.verifier.verify(
-                task, latent, plan, mean_prm, use_calibration=ab.confidence_margin
+                task, latent, executed_plan, mean_prm, use_calibration=ab.confidence_margin
             )
         else:
             verification = VerificationOutcome(

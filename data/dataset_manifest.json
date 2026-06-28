@@ -1,0 +1,18 @@
+{
+  "out_dir": "/workspace/ACDAN/data",
+  "suite": "all",
+  "math": {
+    "gsm8k_train": 7473,
+    "gsm8k_test": 1319,
+    "math500": 500,
+    "aime2025": 30,
+    "omni_math": 4428
+  },
+  "bfcl": {
+    "bfcl_full": 2600
+  },
+  "agentic_raw": {
+    "tau2_bench_data": "/workspace/ACDAN/data/raw/tau2_bench_data",
+    "tau2_bench_hud": "/workspace/ACDAN/data/raw/tau2_bench_hud"
+  }
+}

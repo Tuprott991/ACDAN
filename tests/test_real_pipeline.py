@@ -32,6 +32,35 @@ def test_outcome_exact_and_tool_checkers():
     assert outcome_exact(task, [(gold_idx + 1) % 4]) is False
 
 
+def test_outcome_exact_does_not_last_number_match_malformed_answers():
+    from acdan.datasets.base import RawTask
+    raw = RawTask("m", "solve", ("wrong trail 42", "42"), horizon=1, gold="42", family="math")
+    task = _task(raw)
+    assert outcome_exact(task, [1]) is True
+    assert outcome_exact(task, [0]) is False
+
+
+def test_outcome_exact_handles_boxed_decimal_equivalence():
+    from acdan.datasets.base import RawTask
+    raw = RawTask("m", "solve", (r"\boxed{2.00}",), horizon=1, gold="2", family="math")
+    task = _task(raw)
+    assert outcome_exact(task, [0]) is True
+
+
+def test_outcome_exact_handles_repeated_answer_marker_noise():
+    from acdan.datasets.base import RawTask
+    raw = RawTask(
+        "m",
+        "solve",
+        ("The answer is 2.00. >>>> The answer is 2.00.",),
+        horizon=1,
+        gold="2",
+        family="math",
+    )
+    task = _task(raw)
+    assert outcome_exact(task, [0]) is True
+
+
 def test_outcome_tool_sequence():
     from acdan.datasets.base import RawTask
     raw = RawTask("t", "do it", ("a", "b", "c"), horizon=2, gold=["a", "b"], family="bfcl")

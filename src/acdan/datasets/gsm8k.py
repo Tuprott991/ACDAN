@@ -24,7 +24,14 @@ from acdan.datasets.base import RawTask
 
 
 class GSM8KDataset:
-    def __init__(self, path: Optional[str], limit: Optional[int] = None):
+    def __init__(
+        self,
+        path: Optional[str],
+        limit: Optional[int] = None,
+        include_candidate_counts: bool = False,
+        include_candidate_reasoning: bool = True,
+        use_prm_count_bonus: bool = False,
+    ):
         if not path:
             raise ValueError(
                 "GSM8K adapter needs --data-path to a candidates JSONL "
@@ -32,6 +39,9 @@ class GSM8KDataset:
             )
         self.path = path
         self.limit = limit
+        self.include_candidate_counts = include_candidate_counts
+        self.include_candidate_reasoning = include_candidate_reasoning
+        self.use_prm_count_bonus = use_prm_count_bonus
 
     def _candidate_answer(self, raw: Any) -> str:
         if isinstance(raw, dict):
@@ -65,10 +75,10 @@ class GSM8KDataset:
         templates = {}
         for answer in candidates:
             parts = [f"Final answer: {answer}"]
-            if answer in counts:
+            if self.include_candidate_counts and answer in counts:
                 parts.append(f"Self-consistency count: {counts[answer]}")
             solution = str(solutions.get(answer, "")).strip()
-            if solution:
+            if self.include_candidate_reasoning and solution:
                 parts.append(f"Candidate reasoning:\n{solution}")
             templates[answer] = "\n".join(parts)
         return templates
@@ -99,6 +109,10 @@ class GSM8KDataset:
                         "candidate_solutions": solutions,
                         "candidate_counts": counts,
                         "candidate_first_indices": first_indices,
+                        "candidate_order": d.get("candidate_order", "unknown"),
+                        "include_candidate_counts": self.include_candidate_counts,
+                        "include_candidate_reasoning": self.include_candidate_reasoning,
+                        "use_prm_count_bonus": self.use_prm_count_bonus,
                     },
                 )
                 n += 1

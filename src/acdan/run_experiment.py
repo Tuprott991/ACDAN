@@ -117,6 +117,18 @@ def _fit_inertia(tasks: List[Task], config: ACDANConfig) -> Dict[str, InertialSe
     return sensors
 
 
+def _dataset_kwargs(args: argparse.Namespace) -> dict:
+    kwargs = {}
+    if args.dataset in {"gsm8k", "math"}:
+        evidence = args.math_evidence
+        kwargs.update({
+            "include_candidate_counts": evidence in {"prompt", "all"},
+            "include_candidate_reasoning": not args.no_candidate_reasoning,
+            "use_prm_count_bonus": evidence in {"prm", "all"},
+        })
+    return kwargs
+
+
 # --------------------------------------------------------------------- run
 
 def run(args: argparse.Namespace) -> dict:
@@ -141,11 +153,37 @@ def run(args: argparse.Namespace) -> dict:
     prm = _build_prm(args.prm, args.prm_model, core, args.seed)
     reasoner = LatentReasoner(config.latent, feature_dim=encoder.dim, seed=args.seed)
 
-    dataset = build_dataset(args.dataset, path=args.data_path, limit=args.limit)
+    if args.dataset in {"gsm8k", "math"}:
+        dto_sc = args.math_count_weight if args.math_evidence in {"dto", "all"} else 0.0
+        config = dataclasses.replace(
+            config,
+            dto=dataclasses.replace(config.dto, self_consistency_weight=dto_sc),
+        )
+
+    dataset = build_dataset(
+        args.dataset, path=args.data_path, limit=args.limit, **_dataset_kwargs(args)
+    )
     checker = build_outcome_checker(args.dataset)
     tasks = [_to_task(r, encoder.encode(r.prompt)) for r in dataset.tasks()]
 
-    sensors = _fit_inertia(tasks, config) if (args.method == "acdan" and args.fit_inertia) else {}
+    sensors = {}
+    if args.method == "acdan" and args.fit_inertia:
+        if args.inertia_fit_path:
+            fit_dataset = build_dataset(
+                args.dataset,
+                path=args.inertia_fit_path,
+                limit=args.inertia_fit_limit,
+                **_dataset_kwargs(args),
+            )
+            fit_tasks = [_to_task(r, encoder.encode(r.prompt)) for r in fit_dataset.tasks()]
+            sensors = _fit_inertia(fit_tasks, config)
+        elif args.dataset == "synthetic":
+            sensors = _fit_inertia(tasks, config)
+        else:
+            print(
+                "warning: --fit-inertia ignored without --inertia-fit-path; "
+                "not fitting inertia on evaluation tasks."
+            )
 
     # Independent verifier backend
     independent = None
@@ -201,6 +239,7 @@ def run(args: argparse.Namespace) -> dict:
     oracle_acc = None
     first_acc = None
     last_acc = None
+    highest_count_acc = None
     if args.dataset in {"gsm8k", "math", "jsonl"} and answer_tasks:
         oracle_acc = float(np.mean([
             any(bool(checker(t, [i])) for i in range(t.vocab_size))
@@ -210,9 +249,24 @@ def run(args: argparse.Namespace) -> dict:
         last_acc = float(np.mean([
             bool(checker(t, [t.vocab_size - 1])) for t in answer_tasks
         ]))
+        count_hits = []
+        for t in answer_tasks:
+            counts = t.metadata.get("candidate_counts", {}) or {}
+            if counts:
+                best = max(
+                    range(t.vocab_size),
+                    key=lambda i: (float(counts.get(str(t.vocab[i]), 1.0)), -i),
+                )
+            else:
+                best = 0
+            count_hits.append(bool(checker(t, [best])))
+        highest_count_acc = float(np.mean(count_hits))
     summary = {
         "method": args.method, "dataset": args.dataset, "policy": args.policy,
         "policy_model": args.policy_model, "prm": args.prm, "seed": args.seed,
+        "math_evidence": args.math_evidence if args.dataset in {"gsm8k", "math"} else None,
+        "dto_self_consistency_weight": config.dto.self_consistency_weight,
+        "inertia_fit_path": args.inertia_fit_path,
         "n_tasks": n,
         "accuracy": float(correct.mean()) if n else 0.0,
         "coverage": float(answered.mean()) if n else 0.0,
@@ -231,6 +285,7 @@ def run(args: argparse.Namespace) -> dict:
         summary["oracle_candidate_accuracy"] = oracle_acc
         summary["always_first_accuracy"] = first_acc
         summary["always_last_accuracy"] = last_acc
+        summary["highest_count_accuracy"] = highest_count_acc
     out = {"summary": summary, "per_task": rows if args.save_per_task else []}
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
@@ -258,7 +313,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--judge-model", default="claude-opus-4-8")
     p.add_argument("--n", type=int, default=8, help="N for sc/bon.")
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--fit-inertia", action="store_true", help="Fit inertia from gold (tool tasks).")
+    p.add_argument(
+        "--math-evidence",
+        default="none",
+        choices=["none", "prompt", "prm", "dto", "all"],
+        help="How self-consistency candidate counts may influence math runs.",
+    )
+    p.add_argument("--math-count-weight", type=float, default=0.35)
+    p.add_argument("--no-candidate-reasoning", action="store_true")
+    p.add_argument("--fit-inertia", action="store_true", help="Fit inertia from a separate split.")
+    p.add_argument("--inertia-fit-path", default=None, help="Train/dev JSONL for fitting inertia.")
+    p.add_argument("--inertia-fit-limit", type=int, default=None)
     p.add_argument("--save-per-task", action="store_true")
     p.add_argument("--out", default=None)
     return p

@@ -113,6 +113,8 @@ class LLMAsProcessReward:
         family = str(task.metadata.get("family", ""))
         if family not in {"gsm8k", "math"}:
             return np.zeros((task.horizon, task.vocab_size), dtype=np.float64)
+        if not bool(task.metadata.get("use_prm_count_bonus", False)):
+            return np.zeros((task.horizon, task.vocab_size), dtype=np.float64)
 
         counts = task.metadata.get("candidate_counts", {}) or {}
         vals = np.asarray(

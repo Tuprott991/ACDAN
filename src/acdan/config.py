@@ -68,6 +68,7 @@ class DTOConfig:
     beta_length: float = 0.02         # length / repetition penalty
     gamma_entropy: float = 0.01       # von Neumann entropy bonus (diversity)
     likelihood_weight: float = 0.10   # weight on core-model log-likelihood prior
+    self_consistency_weight: float = 0.0  # optional explicit count prior for math
     temperature: float = 1.0          # softmax temperature for decoding
 
 

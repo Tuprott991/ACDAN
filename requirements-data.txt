@@ -1,0 +1,4 @@
+# Optional data-prep dependencies. Install in the experiment environment with:
+#   .venv/bin/pip install -r requirements-data.txt
+datasets>=2.19
+huggingface-hub>=0.25

@@ -46,6 +46,7 @@ class _Objective:
     likelihood: float
     length_pen: float
     entropy: float
+    self_consistency: float = 0.0
 
 
 def _softmax_jacobian_vjp(probs_row: np.ndarray, grad_row: np.ndarray) -> np.ndarray:
@@ -99,6 +100,28 @@ class DifferentiableTextOptimizer:
         grad_probs = log_prior / probs.shape[0]
         return ll, grad_probs
 
+    def _self_consistency_prior_and_grad(self, task: Task, probs: np.ndarray):
+        """Optional explicit count prior for math candidate selection."""
+        weight = float(getattr(self.cfg, "self_consistency_weight", 0.0))
+        family = str(task.metadata.get("family", ""))
+        if weight == 0.0 or family not in {"gsm8k", "math"}:
+            return 0.0, np.zeros_like(probs)
+
+        counts = task.metadata.get("candidate_counts", {}) or {}
+        vals = np.asarray(
+            [float(counts.get(str(name), 1.0)) for name in task.vocab],
+            dtype=np.float64,
+        )
+        if vals.size == 0 or float(vals.max()) <= float(vals.min()):
+            return 0.0, np.zeros_like(probs)
+
+        z = np.log1p(vals)
+        z = (z - float(z.mean())) / (float(z.std()) + 1e-9)
+        z = np.clip(z, -2.0, 2.0)
+        tiled = np.tile(z, (probs.shape[0], 1))
+        prior = float(np.sum(probs * tiled) / probs.shape[0])
+        return prior, tiled / probs.shape[0]
+
     def _evaluate(
         self,
         task: Task,
@@ -127,9 +150,19 @@ class DifferentiableTextOptimizer:
         else:
             entropy, g_ent = 0.0, np.zeros_like(probs)
 
-        # J = -w_ll*ll - alpha*reward + beta*len - gamma*entropy
-        value = -w_ll * ll - alpha * reward + beta * length_pen - gamma * entropy
-        grad_probs = -w_ll * g_ll - alpha * g_reward + beta * g_len - gamma * g_ent
+        # --- optional explicit self-consistency prior for math counts ---
+        sc_prior, g_sc = self._self_consistency_prior_and_grad(task, probs)
+        delta_sc = float(getattr(self.cfg, "self_consistency_weight", 0.0))
+
+        # J = -w_ll*ll - alpha*reward + beta*len - gamma*entropy - delta_sc*SC
+        value = (
+            -w_ll * ll - alpha * reward + beta * length_pen
+            - gamma * entropy - delta_sc * sc_prior
+        )
+        grad_probs = (
+            -w_ll * g_ll - alpha * g_reward + beta * g_len
+            - gamma * g_ent - delta_sc * g_sc
+        )
 
         # Back-prop grad_probs through per-row softmax to logit space.
         scale = 1.0 / max(self.cfg.temperature, 1e-6)
@@ -138,7 +171,8 @@ class DifferentiableTextOptimizer:
             grad_logits[h] = _softmax_jacobian_vjp(probs[h], grad_probs[h]) * scale
 
         obj = _Objective(value=value, reward=reward, likelihood=ll,
-                         length_pen=length_pen, entropy=entropy)
+                         length_pen=length_pen, entropy=entropy,
+                         self_consistency=sc_prior)
         return obj, grad_logits
 
     # ----------------------------------------------------------------- solve
