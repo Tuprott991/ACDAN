@@ -1,0 +1,2 @@
+file,dataset,method,seed,n_tasks,accuracy,ece,mean_latency_s,mean_real_prompt_tokens,mean_token_surrogate,mean_samples,mean_verified_candidates,oracle_candidate_accuracy,always_first_accuracy,highest_count_accuracy
+results/_smoke_asc_gsm8k.json,gsm8k,asc,0,16,0.8125,0.1875,0.00027690656133927405,0.0,4.375,4.375,0.0,0.9375,0.75,0.875

@@ -22,7 +22,7 @@ coverage.xml
 .ipynb_checkpoints/
 
 # Experiment artifacts (reproducible from configs; not committed)
-results/
+results/old_results
 runs/
 outputs/
 *.log

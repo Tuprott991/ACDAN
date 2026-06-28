@@ -1,0 +1,32 @@
+{
+  "summary": {
+    "method": "acdan",
+    "dataset": "gsm8k",
+    "policy": "vllm",
+    "policy_model": "Qwen/Qwen2.5-7B-Instruct",
+    "prm": "llm",
+    "seed": 0,
+    "math_evidence": "prm",
+    "dto_self_consistency_weight": 0.0,
+    "inertia_fit_path": null,
+    "n_tasks": 1319,
+    "accuracy": 0.9241849886277483,
+    "coverage": 1.0,
+    "selective_accuracy": 0.9241849886277483,
+    "ece": 0.015291017306210526,
+    "mean_latency_s": 0.22863790880354903,
+    "wall_s": 301.5784905180335,
+    "mean_real_prompt_tokens": 2013.1811978771798,
+    "total_real_prompt_tokens": 2655386,
+    "mean_token_surrogate": 1.0,
+    "mean_samples": 1.0,
+    "mean_verified_candidates": 2.036391205458681,
+    "mean_prm_passes": 1.0,
+    "mean_vocab_size": 2.036391205458681,
+    "oracle_candidate_accuracy": 0.9734647460197119,
+    "always_first_accuracy": 0.8741470811220622,
+    "always_last_accuracy": 0.7005307050796058,
+    "highest_count_accuracy": 0.9287338893100834
+  },
+  "per_task": []
+}
