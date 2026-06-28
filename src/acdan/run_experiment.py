@@ -23,7 +23,12 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from acdan.agent import ACDANAgent
-from acdan.baselines import best_of_n_prm, cot_greedy, self_consistency
+from acdan.baselines import (
+    adaptive_self_consistency,
+    best_of_n_prm,
+    cot_greedy,
+    self_consistency,
+)
 from acdan.config import ACDANConfig, AblationFlags
 from acdan.datasets.base import RawTask, build_dataset, build_outcome_checker
 from acdan.inertia import InertialSensor
@@ -205,6 +210,12 @@ def run(args: argparse.Namespace) -> dict:
             conf = res.verification.confidence
             abst = res.metrics.abstained
             tok_surrogate = res.metrics.token_cost
+            cost_info = {
+                "policy_passes": 1,
+                "prm_passes": 1,
+                "samples": 1,
+                "verified_candidates": task.horizon * task.vocab_size,
+            }
         else:
             ab = config.ablation
             trace = (reasoner.reason(task.prompt_features, use_ttt=ab.in_place_ttt)
@@ -214,13 +225,24 @@ def run(args: argparse.Namespace) -> dict:
                 br = cot_greedy(core, task, latent)
             elif args.method == "sc":
                 br = self_consistency(core, task, latent, n=args.n, seed=args.seed)
+            elif args.method == "asc":
+                br = adaptive_self_consistency(
+                    core,
+                    task,
+                    latent,
+                    n=args.n,
+                    threshold=args.asc_threshold,
+                    min_samples=args.asc_min_samples,
+                    seed=args.seed,
+                )
             elif args.method == "bon":
                 br = best_of_n_prm(core, prm, task, latent, n=args.n, seed=args.seed)
             else:
                 raise KeyError(f"unknown method '{args.method}'")
             correct = bool(checker(task, br.actions))
             conf, abst = 1.0, False
-            tok_surrogate = float(task.horizon)
+            cost_info = dict(br.cost)
+            tok_surrogate = float(task.horizon) * float(cost_info.get("samples", 1.0))
         cur_tokens = getattr(core, "n_prompt_tokens", 0) + getattr(prm, "n_prompt_tokens", 0)
         rows.append({
             "task_id": task.task_id, "family": task.metadata.get("family"),
@@ -228,6 +250,10 @@ def run(args: argparse.Namespace) -> dict:
             "latency_s": time.perf_counter() - ts,
             "real_prompt_tokens": cur_tokens - base_tokens,
             "token_surrogate": tok_surrogate,
+            "policy_passes": float(cost_info.get("policy_passes", 0.0)),
+            "prm_passes": float(cost_info.get("prm_passes", 0.0)),
+            "samples": float(cost_info.get("samples", 1.0)),
+            "verified_candidates": float(cost_info.get("verified_candidates", 0.0)),
         })
         base_tokens = cur_tokens
 
@@ -278,6 +304,9 @@ def run(args: argparse.Namespace) -> dict:
         "mean_real_prompt_tokens": float(np.mean([r["real_prompt_tokens"] for r in rows])) if n else 0.0,
         "total_real_prompt_tokens": int(sum(r["real_prompt_tokens"] for r in rows)),
         "mean_token_surrogate": float(np.mean([r["token_surrogate"] for r in rows])) if n else 0.0,
+        "mean_samples": float(np.mean([r["samples"] for r in rows])) if n else 0.0,
+        "mean_verified_candidates": float(np.mean([r["verified_candidates"] for r in rows])) if n else 0.0,
+        "mean_prm_passes": float(np.mean([r["prm_passes"] for r in rows])) if n else 0.0,
     }
     if answer_tasks:
         summary["mean_vocab_size"] = float(np.mean([t.vocab_size for t in answer_tasks]))
@@ -298,7 +327,7 @@ def run(args: argparse.Namespace) -> dict:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="acdan-run", description="ACDAN real experiment runner.")
     p.add_argument("--method", default="acdan",
-                   choices=["acdan", "cot", "sc", "bon"], help="ACDAN or a baseline.")
+                   choices=["acdan", "cot", "sc", "asc", "bon"], help="ACDAN or a baseline.")
     p.add_argument("--disable", default="", help="Comma list of ablation flags to disable.")
     p.add_argument("--dataset", default="synthetic",
                    choices=["synthetic", "jsonl", "gsm8k", "math", "bfcl", "toolbench", "gaia"])
@@ -320,6 +349,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="How self-consistency candidate counts may influence math runs.",
     )
     p.add_argument("--math-count-weight", type=float, default=0.35)
+    p.add_argument("--asc-threshold", type=float, default=0.70)
+    p.add_argument("--asc-min-samples", type=int, default=2)
     p.add_argument("--no-candidate-reasoning", action="store_true")
     p.add_argument("--fit-inertia", action="store_true", help="Fit inertia from a separate split.")
     p.add_argument("--inertia-fit-path", default=None, help="Train/dev JSONL for fitting inertia.")

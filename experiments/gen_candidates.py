@@ -78,9 +78,11 @@ def main() -> None:
     with open(args.out, "w", encoding="utf-8") as fh:
         for row_idx, (r, out) in enumerate(zip(rows, outs)):
             grouped = OrderedDict()
+            sample_answers = []
             for idx, sample in enumerate(out.outputs):
                 solution = sample.text.strip()
                 answer = extract_answer(solution)
+                sample_answers.append(answer)
                 if answer not in grouped:
                     grouped[answer] = {
                         "solution": solution,
@@ -113,6 +115,7 @@ def main() -> None:
                 "candidate_first_indices": {
                     answer: meta["first_index"] for answer, meta in ordered
                 },
+                "candidate_sample_answers": sample_answers,
                 "answer": str(r["answer"]),
             }) + "\n")
     print(f"wrote {len(rows)} tasks -> {args.out}")

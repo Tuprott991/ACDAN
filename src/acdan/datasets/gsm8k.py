@@ -109,6 +109,9 @@ class GSM8KDataset:
                         "candidate_solutions": solutions,
                         "candidate_counts": counts,
                         "candidate_first_indices": first_indices,
+                        "candidate_sample_answers": [
+                            str(x) for x in d.get("candidate_sample_answers", [])
+                        ],
                         "candidate_order": d.get("candidate_order", "unknown"),
                         "include_candidate_counts": self.include_candidate_counts,
                         "include_candidate_reasoning": self.include_candidate_reasoning,

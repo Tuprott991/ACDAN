@@ -3,7 +3,12 @@
 import numpy as np
 
 from acdan.agent import ACDANAgent
-from acdan.baselines import best_of_n_prm, cot_greedy, self_consistency
+from acdan.baselines import (
+    adaptive_self_consistency,
+    best_of_n_prm,
+    cot_greedy,
+    self_consistency,
+)
 from acdan.config import ACDANConfig
 from acdan.datasets.base import (
     SyntheticRawDataset,
@@ -98,6 +103,29 @@ def test_baselines_run_offline():
         assert "policy_passes" in br.cost
 
 
+def test_adaptive_self_consistency_early_stops_grouped_candidates():
+    from acdan.datasets.base import RawTask
+    raw = RawTask(
+        "m",
+        "solve",
+        ("right", "wrong"),
+        horizon=1,
+        gold="right",
+        family="gsm8k",
+        metadata={
+            "candidate_counts": {"right": 6, "wrong": 2},
+            "candidate_first_indices": {"right": 0, "wrong": 1},
+        },
+    )
+    task = _task(raw)
+    cfg = ACDANConfig(seed=0)
+    core = build_core_model("mock", seed=0)
+    latent = np.zeros(task.prompt_features.size)
+    br = adaptive_self_consistency(core, task, latent, n=8, threshold=0.70, min_samples=2)
+    assert br.actions == [0]
+    assert br.cost["samples"] < 8
+
+
 def test_build_dataset_synthetic_and_checker():
     ds = build_dataset("synthetic", limit=5)
     assert len(list(ds.tasks())) == 5
@@ -121,6 +149,14 @@ def test_runner_baseline_mock():
         ["--method", "bon", "--dataset", "synthetic", "--limit", "8", "--n", "4"])
     res = run(args)
     assert res["summary"]["n_tasks"] == 8
+
+
+def test_runner_adaptive_sc_mock():
+    args = build_parser().parse_args(
+        ["--method", "asc", "--dataset", "synthetic", "--limit", "8", "--n", "4"])
+    res = run(args)
+    assert res["summary"]["n_tasks"] == 8
+    assert "mean_samples" in res["summary"]
 
 
 def test_runner_ablation_alias():

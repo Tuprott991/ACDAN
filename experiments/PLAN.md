@@ -111,7 +111,9 @@ Every math result summary now reports `oracle_candidate_accuracy`,
 Policies: `Qwen/Qwen2.5-7B-Instruct`, `meta-llama/Llama-3.1-8B-Instruct`,
 `Qwen/Qwen2.5-3B-Instruct`.
 
-Methods: `acdan`, `bon`, `sc`, `cot`.
+Methods: `acdan`, `bon`, `asc`, `sc`, `cot`.  `asc` is an early-stopping
+self-consistency baseline: it stops once the plurality answer reaches a
+confidence threshold, giving ACDAN a direct adaptive-compute competitor.
 
 ### 3a. Math
 
@@ -120,7 +122,7 @@ DTO count prior.
 
 ```bash
 M=Qwen/Qwen2.5-7B-Instruct; TAG=qwen7b; D=data/gsm8k_${TAG}_k8.jsonl
-for METHOD in acdan bon sc cot; do
+for METHOD in acdan bon asc sc cot; do
   .venv/bin/python -m acdan.run_experiment --method $METHOD --dataset gsm8k \
     --data-path $D --policy vllm --policy-model $M --prm llm \
     --math-evidence none --n 8 --seed 0 \
@@ -138,6 +140,16 @@ for EVID in none prompt prm dto all; do
     --out results/gsm8k_${TAG}_evidence_${EVID}.json
 done
 ```
+
+Full approval matrix with per-task artifacts and Pareto collection:
+
+```bash
+MODEL=Qwen/Qwen2.5-7B-Instruct TAG=qwen7b \
+  experiments/run_approval_matrix.sh
+```
+
+This writes `results/approval/*.json`, `results/approval/pareto.csv`, and
+`results/approval/pareto.svg`.
 
 Module ablations on math should focus on DTO/verification/calibration. Graph and
 inertia are structurally weak on `H=1` tasks.
@@ -163,7 +175,7 @@ M=Qwen/Qwen2.5-7B-Instruct; TAG=qwen7b
 TRAIN=data/bfcl_dev.jsonl
 TEST=data/bfcl_full.jsonl
 
-for METHOD in acdan bon sc cot; do
+for METHOD in acdan bon asc sc cot; do
   .venv/bin/python -m acdan.run_experiment --method $METHOD --dataset bfcl \
     --data-path $TEST --policy vllm --policy-model $M --prm llm \
     --n 8 --seed 0 \
@@ -208,6 +220,7 @@ until the runner produces final answers through an execution layer.
 | Result | What It Can Claim |
 |---|---|
 | `acdan` vs `bon/sc/cot` at same model+PRM | DTO vs discrete decision rules |
+| `acdan` vs `asc` | adaptive candidate/verifier allocation vs early-stop SC |
 | `no_dto` | DTO is the accuracy driver |
 | `no_graph`, `no_inertia` on BFCL | cost/pruning/call-saving effects |
 | `no_verification` / Claude verifier | calibration and abstention effects |
