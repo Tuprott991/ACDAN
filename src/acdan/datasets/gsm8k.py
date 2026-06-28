@@ -27,6 +27,7 @@ class GSM8KDataset:
     def __init__(
         self,
         path: Optional[str],
+        family: str = "gsm8k",
         limit: Optional[int] = None,
         include_candidate_counts: bool = False,
         include_candidate_reasoning: bool = True,
@@ -34,10 +35,11 @@ class GSM8KDataset:
     ):
         if not path:
             raise ValueError(
-                "GSM8K adapter needs --data-path to a candidates JSONL "
+                "Math answer-selection adapter needs --data-path to a candidates JSONL "
                 "(see experiments/PLAN.md Step 1 to generate it)."
             )
         self.path = path
+        self.family = family
         self.limit = limit
         self.include_candidate_counts = include_candidate_counts
         self.include_candidate_reasoning = include_candidate_reasoning
@@ -96,12 +98,12 @@ class GSM8KDataset:
                     continue
                 solutions, counts, first_indices = self._candidate_metadata(d, cands)
                 yield RawTask(
-                    task_id=d.get("task_id", f"gsm8k-{i:05d}"),
+                    task_id=d.get("task_id", f"{self.family}-{i:05d}"),
                     prompt=d["question"],
                     vocab=tuple(cands),
                     horizon=1,
                     gold=str(d["answer"]),
-                    family="gsm8k",
+                    family=self.family,
                     difficulty=float(d.get("difficulty", 0.5)),
                     action_templates=self._action_templates(cands, solutions, counts),
                     metadata={

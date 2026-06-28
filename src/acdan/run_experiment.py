@@ -30,7 +30,7 @@ from acdan.baselines import (
     self_consistency,
 )
 from acdan.config import ACDANConfig, AblationFlags
-from acdan.datasets.base import RawTask, build_dataset, build_outcome_checker
+from acdan.datasets.base import MATH_DATASETS, RawTask, build_dataset, build_outcome_checker
 from acdan.inertia import InertialSensor
 from acdan.latent_reasoning import LatentReasoner
 from acdan.metrics import expected_calibration_error
@@ -124,7 +124,7 @@ def _fit_inertia(tasks: List[Task], config: ACDANConfig) -> Dict[str, InertialSe
 
 def _dataset_kwargs(args: argparse.Namespace) -> dict:
     kwargs = {}
-    if args.dataset in {"gsm8k", "math"}:
+    if args.dataset in MATH_DATASETS:
         evidence = args.math_evidence
         kwargs.update({
             "include_candidate_counts": evidence in {"prompt", "all"},
@@ -158,7 +158,7 @@ def run(args: argparse.Namespace) -> dict:
     prm = _build_prm(args.prm, args.prm_model, core, args.seed)
     reasoner = LatentReasoner(config.latent, feature_dim=encoder.dim, seed=args.seed)
 
-    if args.dataset in {"gsm8k", "math"}:
+    if args.dataset in MATH_DATASETS:
         dto_sc = args.math_count_weight if args.math_evidence in {"dto", "all"} else 0.0
         config = dataclasses.replace(
             config,
@@ -266,7 +266,7 @@ def run(args: argparse.Namespace) -> dict:
     first_acc = None
     last_acc = None
     highest_count_acc = None
-    if args.dataset in {"gsm8k", "math", "jsonl"} and answer_tasks:
+    if args.dataset in (MATH_DATASETS | {"jsonl"}) and answer_tasks:
         oracle_acc = float(np.mean([
             any(bool(checker(t, [i])) for i in range(t.vocab_size))
             for t in answer_tasks
@@ -290,7 +290,7 @@ def run(args: argparse.Namespace) -> dict:
     summary = {
         "method": args.method, "dataset": args.dataset, "policy": args.policy,
         "policy_model": args.policy_model, "prm": args.prm, "seed": args.seed,
-        "math_evidence": args.math_evidence if args.dataset in {"gsm8k", "math"} else None,
+        "math_evidence": args.math_evidence if args.dataset in MATH_DATASETS else None,
         "dto_self_consistency_weight": config.dto.self_consistency_weight,
         "inertia_fit_path": args.inertia_fit_path,
         "n_tasks": n,
@@ -330,7 +330,10 @@ def build_parser() -> argparse.ArgumentParser:
                    choices=["acdan", "cot", "sc", "asc", "bon"], help="ACDAN or a baseline.")
     p.add_argument("--disable", default="", help="Comma list of ablation flags to disable.")
     p.add_argument("--dataset", default="synthetic",
-                   choices=["synthetic", "jsonl", "gsm8k", "math", "bfcl", "toolbench", "gaia"])
+                   choices=[
+                       "synthetic", "jsonl", "gsm8k", "math", "math500",
+                       "aime2025", "omni_math", "bfcl", "toolbench", "gaia",
+                   ])
     p.add_argument("--data-path", default=None, help="Local JSONL path for real datasets.")
     p.add_argument("--limit", type=int, default=None, help="Max tasks.")
     p.add_argument("--policy", default="mock", choices=["mock", "vllm"])

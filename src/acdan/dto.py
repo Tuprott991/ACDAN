@@ -31,6 +31,7 @@ from typing import Callable, List, Optional
 import numpy as np
 
 from acdan.config import DTOConfig
+from acdan.datasets.base import MATH_DATASETS
 from acdan.rewards import ProcessRewardModel
 from acdan.types import Plan, Task, softmax
 
@@ -104,7 +105,7 @@ class DifferentiableTextOptimizer:
         """Optional explicit count prior for math candidate selection."""
         weight = float(getattr(self.cfg, "self_consistency_weight", 0.0))
         family = str(task.metadata.get("family", ""))
-        if weight == 0.0 or family not in {"gsm8k", "math"}:
+        if weight == 0.0 or family not in MATH_DATASETS:
             return 0.0, np.zeros_like(probs)
 
         counts = task.metadata.get("candidate_counts", {}) or {}

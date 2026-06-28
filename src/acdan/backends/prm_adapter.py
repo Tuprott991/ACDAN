@@ -18,6 +18,7 @@ from typing import List, Optional, Sequence
 
 import numpy as np
 
+from acdan.datasets.base import MATH_DATASETS
 from acdan.types import Task
 
 
@@ -86,7 +87,7 @@ class LLMAsProcessReward:
         prompt = str(task.metadata.get("prompt", ""))
         family = str(task.metadata.get("family", ""))
         action = str(task.vocab[v])
-        if family in {"gsm8k", "math"}:
+        if family in MATH_DATASETS:
             solutions = task.metadata.get("candidate_solutions", {}) or {}
             counts = task.metadata.get("candidate_counts", {}) or {}
             solution = str(solutions.get(action, "")).strip()
@@ -111,7 +112,7 @@ class LLMAsProcessReward:
 
     def _self_consistency_bonus(self, task: Task) -> np.ndarray:
         family = str(task.metadata.get("family", ""))
-        if family not in {"gsm8k", "math"}:
+        if family not in MATH_DATASETS:
             return np.zeros((task.horizon, task.vocab_size), dtype=np.float64)
         if not bool(task.metadata.get("use_prm_count_bonus", False)):
             return np.zeros((task.horizon, task.vocab_size), dtype=np.float64)

@@ -32,6 +32,10 @@ from acdan.datasets.math_answer import answers_equivalent
 from acdan.types import Task
 
 
+MATH_DATASETS = frozenset({"gsm8k", "math", "math500", "aime2025", "omni_math"})
+ANSWER_SELECTION_DATASETS = frozenset({"synthetic", "jsonl"}) | MATH_DATASETS
+
+
 @dataclass
 class RawTask:
     task_id: str
@@ -115,9 +119,9 @@ def build_dataset(kind: str, path: Optional[str] = None, limit: Optional[int] = 
         if not path:
             raise ValueError("jsonl dataset requires --data-path")
         return JSONLRawDataset(path, family="jsonl", limit=limit)
-    if kind in {"gsm8k", "math"}:
+    if kind in MATH_DATASETS:
         from acdan.datasets.gsm8k import GSM8KDataset
-        return GSM8KDataset(path, limit=limit, **kwargs)
+        return GSM8KDataset(path, family=kind, limit=limit, **kwargs)
     if kind in {"bfcl", "toolbench"}:
         from acdan.datasets.bfcl import BFCLDataset
         return BFCLDataset(path, limit=limit)
@@ -162,7 +166,7 @@ def outcome_tool_sequence(task: Task, actions: Sequence[int]) -> bool:
 
 def build_outcome_checker(kind: str):
     """Return the default checker for a dataset family (Claude judge for gaia)."""
-    if kind in {"synthetic", "gsm8k", "math", "jsonl"}:
+    if kind in ANSWER_SELECTION_DATASETS:
         return outcome_exact
     if kind in {"bfcl", "toolbench"}:
         return outcome_tool_sequence

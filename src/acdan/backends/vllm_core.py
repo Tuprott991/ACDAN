@@ -16,6 +16,7 @@ from typing import List
 
 import numpy as np
 
+from acdan.datasets.base import MATH_DATASETS
 from acdan.types import Task
 
 
@@ -82,7 +83,7 @@ class VLLMCoreModel:
         contexts: List[str] = []
         conts: List[str] = []
         for h in range(H):
-            if family in {"gsm8k", "math"}:
+            if family in MATH_DATASETS:
                 ctx = (
                     "Solve the math problem and evaluate the proposed answer.\n\n"
                     f"Problem:\n{prompt}\n\n"
@@ -93,7 +94,7 @@ class VLLMCoreModel:
             for v in range(V):
                 name = task.vocab[v]
                 contexts.append(ctx)
-                if family in {"gsm8k", "math"}:
+                if family in MATH_DATASETS:
                     conts.append(str(templates.get(name, f"Final answer: {name}")))
                 else:
                     conts.append(str(templates.get(name, name)))
