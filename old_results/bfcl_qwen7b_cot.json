@@ -14,14 +14,11 @@
     "coverage": 1.0,
     "selective_accuracy": 0.8026923076923077,
     "ece": 0.1973076923076923,
-    "mean_latency_s": 0.11179614632981472,
-    "wall_s": 290.6775999478996,
+    "mean_latency_s": 0.11731473024397229,
+    "wall_s": 305.0257765161805,
     "mean_real_prompt_tokens": 824.495,
     "total_real_prompt_tokens": 2143687,
     "mean_token_surrogate": 1.3076923076923077,
-    "mean_samples": 1.0,
-    "mean_verified_candidates": 0.0,
-    "mean_prm_passes": 0.0,
     "mean_vocab_size": 2.6123205187586844
   },
   "per_task": []

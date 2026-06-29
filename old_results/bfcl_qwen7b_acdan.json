@@ -1,6 +1,6 @@
 {
   "summary": {
-    "method": "bon",
+    "method": "acdan",
     "dataset": "bfcl",
     "policy": "vllm",
     "policy_model": "Qwen/Qwen2.5-7B-Instruct",
@@ -10,18 +10,15 @@
     "dto_self_consistency_weight": 0.0,
     "inertia_fit_path": "data/bfcl_dev.jsonl",
     "n_tasks": 2600,
-    "accuracy": 0.8815384615384615,
+    "accuracy": 0.8992307692307693,
     "coverage": 1.0,
-    "selective_accuracy": 0.8815384615384615,
-    "ece": 0.11846153846153851,
-    "mean_latency_s": 0.14370551007262503,
-    "wall_s": 373.6433251951821,
+    "selective_accuracy": 0.8992307692307693,
+    "ece": 0.04331840642087271,
+    "mean_latency_s": 0.15917088120011613,
+    "wall_s": 413.8511881409213,
     "mean_real_prompt_tokens": 1587.3492307692309,
     "total_real_prompt_tokens": 4127108,
-    "mean_token_surrogate": 10.461538461538462,
-    "mean_samples": 8.0,
-    "mean_verified_candidates": 3.1,
-    "mean_prm_passes": 1.0,
+    "mean_token_surrogate": 1.29,
     "mean_vocab_size": 2.6123205187586844
   },
   "per_task": []
