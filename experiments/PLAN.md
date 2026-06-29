@@ -5,7 +5,8 @@ still **tool/operator-selection DTO**: the policy scores candidate actions into
 an `(H, V)` prior, DTO refines that prior, and a PRM supplies reward gradients.
 Math runs are `H=1, V=K` answer selection over pre-generated candidates; graph
 and inertia should be evaluated on multi-step tool/agent tasks, not sold as math
-accuracy modules.
+accuracy modules. Latent reasoning gates the LLM-PRM target sharpness through
+`quality(latent)`; it is not hidden-state TTT of the base LLM.
 
 ---
 
@@ -49,6 +50,14 @@ The setup script prepares stable local files and raw snapshots:
 .venv/bin/python scripts/setup_datasets.py --suite all --overwrite
 ```
 
+Fast sanity checks before candidate generation:
+
+```bash
+wc -l data/gsm8k_test.jsonl data/math500.jsonl data/aime2025.jsonl data/bfcl_full.jsonl
+.venv/bin/python -m acdan.run_experiment --method acdan --dataset synthetic --limit 24 \
+  --out results/_smoke_synthetic.json
+```
+
 Outputs currently prepared:
 
 | File | Rows | Use |
@@ -79,16 +88,24 @@ M=Qwen/Qwen2.5-7B-Instruct
 TAG=qwen7b
 
 .venv/bin/python experiments/gen_candidates.py --model $M \
-  --in data/gsm8k_test.jsonl --out data/gsm8k_${TAG}_k8.jsonl \
+  --in data/gsm8k_test.jsonl --out data/gsm8k_${TAG}_k8_sample.jsonl \
   --k 8 --order sample
 
 .venv/bin/python experiments/gen_candidates.py --model $M \
-  --in data/math500.jsonl --out data/math500_${TAG}_k8.jsonl \
+  --in data/math500.jsonl --out data/math500_${TAG}_k8_sample.jsonl \
   --k 8 --order sample
 
 .venv/bin/python experiments/gen_candidates.py --model $M \
-  --in data/aime2025.jsonl --out data/aime2025_${TAG}_k16.jsonl \
+  --in data/aime2025.jsonl --out data/aime2025_${TAG}_k16_sample.jsonl \
   --k 16 --order sample
+```
+
+Optional broad math file after the primary runs are stable:
+
+```bash
+.venv/bin/python experiments/gen_candidates.py --model $M \
+  --in data/omni_math.jsonl --out data/omni_math_${TAG}_k8_sample.jsonl \
+  --k 8 --order sample
 ```
 
 Useful controls:
@@ -103,6 +120,9 @@ Useful controls:
 
 Every math result summary now reports `oracle_candidate_accuracy`,
 `always_first_accuracy`, `always_last_accuracy`, and `highest_count_accuracy`.
+If `always_first_accuracy` or `always_last_accuracy` is suspiciously close to
+selected-method accuracy, regenerate candidates with `--order shuffle` and a
+fixed `--shuffle-seed` before making claims.
 
 ---
 
@@ -111,9 +131,13 @@ Every math result summary now reports `oracle_candidate_accuracy`,
 Policies: `Qwen/Qwen2.5-7B-Instruct`, `meta-llama/Llama-3.1-8B-Instruct`,
 `Qwen/Qwen2.5-3B-Instruct`.
 
-Methods: `acdan`, `bon`, `asc`, `sc`, `cot`.  `asc` is an early-stopping
+Primary methods: `acdan`, `bon`, `asc`, `sc`, `cot`. `asc` is an early-stopping
 self-consistency baseline: it stops once the plurality answer reaches a
 confidence threshold, giving ACDAN a direct adaptive-compute competitor.
+
+Secondary search/refinement baselines now available in the same runner:
+`tot`, `rap`, `refine`, `s1`. Include them in the appendix matrix or targeted
+BFCL/math robustness table after the primary Pareto gates pass.
 
 ### 3a. Math
 
@@ -121,8 +145,19 @@ Default rigorous math run: no candidate counts in prompts, no PRM count bonus, n
 DTO count prior.
 
 ```bash
-M=Qwen/Qwen2.5-7B-Instruct; TAG=qwen7b; D=data/gsm8k_${TAG}_k8.jsonl
+M=Qwen/Qwen2.5-7B-Instruct; TAG=qwen7b; D=data/gsm8k_${TAG}_k8_sample.jsonl
 for METHOD in acdan bon asc sc cot; do
+  .venv/bin/python -m acdan.run_experiment --method $METHOD --dataset gsm8k \
+    --data-path $D --policy vllm --policy-model $M --prm llm \
+    --math-evidence none --n 8 --seed 0 \
+    --out results/gsm8k_${TAG}_${METHOD}.json
+done
+```
+
+Optional secondary baselines at matched `N=8`:
+
+```bash
+for METHOD in tot rap refine s1; do
   .venv/bin/python -m acdan.run_experiment --method $METHOD --dataset gsm8k \
     --data-path $D --policy vllm --policy-model $M --prm llm \
     --math-evidence none --n 8 --seed 0 \
@@ -152,7 +187,10 @@ This writes `results/approval/*.json`, `results/approval/pareto.csv`, and
 `results/approval/pareto.svg`.
 
 Module ablations on math should focus on DTO/verification/calibration. Graph and
-inertia are structurally weak on `H=1` tasks.
+inertia are structurally weak on `H=1` tasks. `no_latent` and `no_ttt` should now
+move only through latent-quality-conditioned PRM sharpness and calibration; if
+they remain flat, report them as weak/negative evidence rather than overstating
+latent reasoning.
 
 ```bash
 for ABL in no_dto no_verification no_latent no_ttt; do
@@ -162,8 +200,10 @@ for ABL in no_dto no_verification no_latent no_ttt; do
 done
 ```
 
-Repeat the same block for `math500`, `aime2025`, and later `omni_math` once1
-candidate files exist.
+Repeat the same block for `math500`, `aime2025`, and later `omni_math` once
+candidate files exist. Use dataset names `math500` or `math` for MATH-500;
+the approval script currently uses `math` with
+`data/math500_${TAG}_k8_sample.jsonl`.
 
 ### 3b. BFCL / Tool Use
 
@@ -181,6 +221,28 @@ for METHOD in acdan bon asc sc cot; do
     --n 8 --seed 0 \
     --fit-inertia --inertia-fit-path $TRAIN \
     --out results/bfcl_${TAG}_${METHOD}.json
+done
+```
+
+Secondary BFCL baselines:
+
+```bash
+for METHOD in tot rap refine s1; do
+  .venv/bin/python -m acdan.run_experiment --method $METHOD --dataset bfcl \
+    --data-path $TEST --policy vllm --policy-model $M --prm llm \
+    --n 8 --seed 0 \
+    --out results/bfcl_${TAG}_${METHOD}.json
+done
+```
+
+BFCL module ablations for the main table:
+
+```bash
+for ABL in no_dto no_graph no_inertia no_verification no_latent no_ttt; do
+  .venv/bin/python -m acdan.run_experiment --method acdan --disable $ABL \
+    --dataset bfcl --data-path $TEST --policy vllm --policy-model $M --prm llm \
+    --n 8 --seed 0 --fit-inertia --inertia-fit-path $TRAIN \
+    --out results/bfcl_${TAG}_abl_${ABL}.json
 done
 ```
 
@@ -206,12 +268,18 @@ until the runner produces final answers through an execution layer.
 
 1. Offline tests and synthetic run.
 2. `scripts/setup_datasets.py --suite all`.
-3. BFCL smoke run to measure throughput.
-4. BFCL full matrix, including graph/inertia ablations and calibration.
-5. GSM8K/MATH-500 with neutral candidate order and `--math-evidence none`.
+3. Generate neutral-order candidate files matching the approval script names:
+  `gsm8k_${TAG}_k8_sample`, `math500_${TAG}_k8_sample`, and
+  `aime2025_${TAG}_k16_sample`.
+4. BFCL and GSM8K smoke runs with `--limit 50` to measure throughput and catch
+  prompt/token regressions.
+5. GSM8K/MATH-500 primary matrix with `--math-evidence none`.
 6. Math evidence ablation: `none`, `prompt`, `prm`, `dto`, `all`.
-7. AIME 2025 and Omni-MATH after candidate generation budget is available.
-8. tau2/GAIA only after adding real execution/final-answer generation.
+7. BFCL full matrix, including graph/inertia ablations and calibration.
+8. Secondary baselines (`tot`, `rap`, `refine`, `s1`) on GSM8K and BFCL if the
+  primary matrix is stable.
+9. AIME 2025 and Omni-MATH after candidate generation budget is available.
+10. tau2/GAIA only after adding real execution/final-answer generation.
 
 ---
 
@@ -224,8 +292,10 @@ until the runner produces final answers through an execution layer.
 | `no_dto` | DTO is the accuracy driver |
 | `no_graph`, `no_inertia` on BFCL | cost/pruning/call-saving effects |
 | `no_verification` / Claude verifier | calibration and abstention effects |
+| `no_latent`, `no_ttt` | effect of latent-quality-gated PRM sharpness/calibration |
 | math `highest_count_accuracy` | strength of self-consistency plurality |
 | evidence ablation | whether counts help through prompt, PRM, DTO, or all |
+| `tot`, `rap`, `refine`, `s1` | search/refinement decision rules under the same prior+PRM |
 
 Do not claim graph/inertia improve GSM8K/MATH accuracy; those tasks are one-step
 answer selection. Do not claim BFCL argument correctness from the current runner;
@@ -233,6 +303,10 @@ use official AST/executable evaluation for that.
 
 Report real `total_real_prompt_tokens`, `mean_latency_s`, mean +- std over at
 least three seeds, and the candidate diagnostics in every math table.
+
+Treat `evidence_all` as ACDAN with all count-evidence channels enabled, not as a
+separate competing method. If it becomes the chosen math default, name it clearly
+as an ACDAN evidence setting in tables.
 
 ---
 

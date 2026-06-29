@@ -159,9 +159,9 @@ prompts and PRM scoring. Count evidence is only enabled in a named ablation
 \caption{ACDAN Inference}
 \label{alg:acdan}
 \begin{algorithmic}[1]
-\STATE Encode task $x$ and candidate/action set $\mathcal{C}(x)$
+\STATE Encode task $x$ and candidate/action set $\mathcal{C}(x)$; compute latent quality $q(u)$
 \STATE Produce prior logits $L_0=f_\theta(x,\mathcal{C})$
-\STATE Refine logits by DTO: $L_T \leftarrow \textsc{DTO}(L_0, \mathrm{PRM}, \delta_{\mathrm{sc}})$
+\STATE Refine logits by DTO with PRM target sharpness conditioned on $q(u)$
 \STATE Decode draft actions $d_h=\arg\max_v \mathrm{softmax}(L_T/\tau)_{hv}$
 \STATE Overlay high-confidence inertia actions fit from train/dev traces only
 \STATE Score executed actions, compute Net Information Gain, build dependency graph
@@ -170,6 +170,20 @@ prompts and PRM scoring. Count evidence is only enabled in a named ablation
 \RETURN selected candidate/tool trace, confidence, cost metrics
 \end{algorithmic}
 \end{algorithm}
+
+\paragraph{Latent-quality-conditioned PRM.}
+ACDAN includes a lightweight latent reasoning block that maps the encoded task to
+a state $u$ and scalar quality $q(u)\in[0,1]$. The implementation uses this
+quality as a gate on verifier sharpness rather than as hidden-state adaptation of
+the underlying LLM. Given raw PRM rewards $r_{hv}$, DTO receives the target
+\begin{equation}
+t_{hv}=\mathrm{softmax}_v\left(s(u) r_{hv}\right),\qquad
+s(u)=s_0\max\{0.1,1+\eta_q(2q(u)-1)\},
+\end{equation}
+so higher-quality latent states produce a more decisive PRM gradient and
+lower-quality states produce a flatter, more conservative target. The same latent
+summary also feeds the calibration probe, but the method does not update the
+base LLM's transformer weights, activations, or KV cache at inference time.
 
 \begin{algorithm}[t]
 \caption{Adaptive Self-Consistency Baseline}
@@ -320,8 +334,10 @@ inertia are efficiency modules for multi-step tool traces and are not expected t
 improve one-step math accuracy. Fourth, BFCL conversion preserves gold argument
 metadata, but the default runner judges only tool-name sequences; official
 AST/executable evaluation is required before claiming full function-calling
-correctness. Fifth, tau2/GAIA raw snapshots are prepared, but no final-answer
-executor is integrated yet. Sixth, several fast-moving related-work citations
+correctness. Fifth, latent reasoning gates PRM sharpness through a scalar quality
+score; it does not perform hidden-state test-time training of the underlying LLM.
+Sixth, tau2/GAIA raw snapshots are prepared, but no final-answer
+executor is integrated yet. Seventh, several fast-moving related-work citations
 and dataset versions must be re-verified before camera-ready submission.
 
 \section{Conclusion}

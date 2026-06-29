@@ -35,6 +35,12 @@ Term-by-term implementation (`dto.py`):
 - `R_prm(P) = (1/H) Σ_h ⟨P_h, t_h⟩`, with `t_h` a per-step softmax-sharpened
   reward target from the PRM (`MockProcessReward._reward_target`). Gradient is the
   constant `t/H` — the PRM "back-propagates" into the logits.
+- For the LLM PRM backend, the target sharpness is gated by latent quality:
+  `t_h = softmax(s(h_latent) · r_h)`, where
+  `s(h_latent) = s0 · max(0.1, 1 + η_q · (2q(h_latent) − 1))` and
+  `q(h_latent) ∈ [0,1]`. Higher-quality latents make the PRM target sharper;
+  lower-quality latents make it flatter. This is scalar verifier-temperature
+  control, not hidden-state adaptation of the underlying LLM.
 - `len_pen(P) = (1/(H−1)) Σ_h ⟨P_h, P_{h−1}⟩` penalises consecutive-step overlap
   (repetition / overthinking).
 - `H_vN` — see §3.

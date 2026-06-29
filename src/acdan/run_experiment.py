@@ -27,7 +27,11 @@ from acdan.baselines import (
     adaptive_self_consistency,
     best_of_n_prm,
     cot_greedy,
+    reasoning_as_planning,
+    s1_budget_forcing,
     self_consistency,
+    self_refine,
+    tree_of_thoughts,
 )
 from acdan.config import ACDANConfig, AblationFlags
 from acdan.datasets.base import MATH_DATASETS, RawTask, build_dataset, build_outcome_checker
@@ -157,6 +161,8 @@ def run(args: argparse.Namespace) -> dict:
     core = _build_core(args.policy, args.policy_model, args.seed)
     prm = _build_prm(args.prm, args.prm_model, core, args.seed)
     reasoner = LatentReasoner(config.latent, feature_dim=encoder.dim, seed=args.seed)
+    if hasattr(prm, "set_latent_quality_fn"):
+        prm.set_latent_quality_fn(reasoner.quality)
 
     if args.dataset in MATH_DATASETS:
         dto_sc = args.math_count_weight if args.math_evidence in {"dto", "all"} else 0.0
@@ -237,6 +243,36 @@ def run(args: argparse.Namespace) -> dict:
                 )
             elif args.method == "bon":
                 br = best_of_n_prm(core, prm, task, latent, n=args.n, seed=args.seed)
+            elif args.method == "tot":
+                br = tree_of_thoughts(
+                    core, prm, task, latent,
+                    n_per_step=args.tot_n_per_step,
+                    keep_top_b=args.tot_keep_top_b,
+                    seed=args.seed,
+                )
+            elif args.method == "rap":
+                br = reasoning_as_planning(
+                    core, prm, task, latent,
+                    n_rollouts=args.n,
+                    c_puct=args.rap_c_puct,
+                    seed=args.seed,
+                )
+            elif args.method == "refine":
+                br = self_refine(
+                    core, prm, task, latent,
+                    max_iters=args.refine_max_iters,
+                    feedback_weight=args.refine_feedback_weight,
+                    seed=args.seed,
+                )
+            elif args.method == "s1":
+                br = s1_budget_forcing(
+                    core, prm, task, latent,
+                    max_budget=args.n,
+                    min_budget=args.s1_min_budget,
+                    plurality_threshold=args.s1_threshold,
+                    reward_temp=args.s1_reward_temp,
+                    seed=args.seed,
+                )
             else:
                 raise KeyError(f"unknown method '{args.method}'")
             correct = bool(checker(task, br.actions))
@@ -327,7 +363,9 @@ def run(args: argparse.Namespace) -> dict:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="acdan-run", description="ACDAN real experiment runner.")
     p.add_argument("--method", default="acdan",
-                   choices=["acdan", "cot", "sc", "asc", "bon"], help="ACDAN or a baseline.")
+                   choices=["acdan", "cot", "sc", "asc", "bon",
+                            "tot", "rap", "refine", "s1"],
+                   help="ACDAN or a baseline (incl. ToT, RAP, Self-Refine, s1).")
     p.add_argument("--disable", default="", help="Comma list of ablation flags to disable.")
     p.add_argument("--dataset", default="synthetic",
                    choices=[
@@ -354,6 +392,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--math-count-weight", type=float, default=0.35)
     p.add_argument("--asc-threshold", type=float, default=0.70)
     p.add_argument("--asc-min-samples", type=int, default=2)
+    # --- ToT / RAP / Self-Refine / s1 budget-forcing knobs ---
+    p.add_argument("--tot-n-per-step", type=int, default=4,
+                   help="ToT: successor samples per partial per step.")
+    p.add_argument("--tot-keep-top-b", type=int, default=2,
+                   help="ToT: beam width (top-B partials kept per depth).")
+    p.add_argument("--rap-c-puct", type=float, default=1.4,
+                   help="RAP: PUCT exploration constant.")
+    p.add_argument("--refine-max-iters", type=int, default=4,
+                   help="Self-Refine: maximum propose-critique-refine iterations.")
+    p.add_argument("--refine-feedback-weight", type=float, default=1.0,
+                   help="Self-Refine: weight of PRM critique vs prior log-prob.")
+    p.add_argument("--s1-min-budget", type=int, default=2,
+                   help="s1: minimum samples before the Final Answer trigger may fire.")
+    p.add_argument("--s1-threshold", type=float, default=0.70,
+                   help="s1: plurality threshold that triggers Final Answer.")
+    p.add_argument("--s1-reward-temp", type=float, default=1.0,
+                   help="s1: temperature on the PRM reward in the continuation distribution.")
     p.add_argument("--no-candidate-reasoning", action="store_true")
     p.add_argument("--fit-inertia", action="store_true", help="Fit inertia from a separate split.")
     p.add_argument("--inertia-fit-path", default=None, help="Train/dev JSONL for fitting inertia.")

@@ -7,7 +7,11 @@ from acdan.baselines import (
     adaptive_self_consistency,
     best_of_n_prm,
     cot_greedy,
+    reasoning_as_planning,
+    s1_budget_forcing,
     self_consistency,
+    self_refine,
+    tree_of_thoughts,
 )
 from acdan.config import ACDANConfig
 from acdan.datasets.base import (
@@ -165,3 +169,34 @@ def test_runner_ablation_alias():
         ["--method", "acdan", "--disable", "no_dto", "--dataset", "synthetic", "--limit", "8"])
     res = run(args)
     assert res["summary"]["n_tasks"] == 8
+
+
+def test_new_baselines_run_offline():
+    """ToT / RAP / Self-Refine / s1 produce well-formed plans on mock backends."""
+    raw = next(iter(SyntheticRawDataset(n=1, k=4, seed=3).tasks()))
+    task = _task(raw)
+    cfg = ACDANConfig(seed=0)
+    core = build_core_model("mock", seed=0)
+    prm = build_prm("mock", seed=0)
+    rea = LatentReasoner(cfg.latent, feature_dim=task.prompt_features.size, seed=0)
+    latent = rea.reason(task.prompt_features).final_state
+    results = {
+        "tot": tree_of_thoughts(core, prm, task, latent, n_per_step=3, keep_top_b=2),
+        "rap": reasoning_as_planning(core, prm, task, latent, n_rollouts=6),
+        "refine": self_refine(core, prm, task, latent, max_iters=4),
+        "s1": s1_budget_forcing(core, prm, task, latent, max_budget=6, min_budget=2),
+    }
+    for name, br in results.items():
+        assert len(br.actions) == task.horizon, name
+        assert all(0 <= a < task.vocab_size for a in br.actions), name
+        assert br.cost["samples"] >= 1, name
+        assert br.cost["verified_candidates"] == task.horizon * task.vocab_size, name
+
+
+def test_runner_new_baselines_mock():
+    for method in ("tot", "rap", "refine", "s1"):
+        args = build_parser().parse_args(
+            ["--method", method, "--dataset", "synthetic", "--limit", "6", "--n", "4"])
+        res = run(args)
+        assert res["summary"]["n_tasks"] == 6
+        assert 0.0 <= res["summary"]["accuracy"] <= 1.0

@@ -158,3 +158,233 @@ def best_of_n_prm(core: CoreModel, prm: ProcessRewardModel, task: Task,
                               "samples": n,
                               "verified_candidates": H * V,
                           })
+
+
+# ---------------------------------------------------------------------------
+# Additional related-work baselines (Tree-of-Thoughts, RAP, Self-Refine, s1).
+# These share ACDAN's prior + PRM so the only thing that varies is the search /
+# refinement rule. They are framework-agnostic: when H==1 (math candidate
+# selection) they reduce to principled selectors over the K answer candidates;
+# when H>1 (tool plans) they search the action-step lattice.
+# ---------------------------------------------------------------------------
+
+
+def tree_of_thoughts(
+    core: CoreModel,
+    prm: ProcessRewardModel,
+    task: Task,
+    latent: np.ndarray,
+    n_per_step: int = 4,
+    keep_top_b: int = 2,
+    seed: int = 0,
+) -> BaselineResult:
+    """Tree-of-Thoughts (Yao et al., 2023): stepwise BFS with value-based pruning.
+
+    At each step we expand each surviving partial by sampling ``n_per_step``
+    distinct successor actions from the prior, score each extension with the
+    PRM reward field, and keep the top ``keep_top_b`` partials by cumulative
+    PRM score. Shares ACDAN's prior + PRM for a fair comparison.
+    """
+    prior = core.prior_logits(task, latent)
+    R = prm.step_reward_matrix(task, latent)
+    H, V = prior.shape
+    probs = softmax(prior, axis=1)
+    rng = np.random.default_rng(seed)
+
+    frontier: List[tuple[List[int], float]] = [([], 0.0)]
+    total_samples = 0
+    for h in range(H):
+        nxt: List[tuple[List[int], float]] = []
+        for actions, cum in frontier:
+            seen: set[int] = set()
+            for _ in range(n_per_step):
+                a = int(rng.choice(V, p=probs[h]))
+                seen.add(a)
+            total_samples += len(seen)
+            for a in seen:
+                nxt.append((actions + [a], cum + float(R[h, a])))
+        nxt.sort(key=lambda item: item[1], reverse=True)
+        frontier = nxt[: max(1, keep_top_b)] or [([0] * (h + 1), 0.0)]
+
+    best = frontier[0][0] if frontier else [0] * H
+    return BaselineResult(
+        best,
+        {
+            "policy_passes": 1,
+            "prm_passes": 1,
+            "samples": float(total_samples),
+            "verified_candidates": H * V,
+            "keep_top_b": float(keep_top_b),
+        },
+    )
+
+
+def reasoning_as_planning(
+    core: CoreModel,
+    prm: ProcessRewardModel,
+    task: Task,
+    latent: np.ndarray,
+    n_rollouts: int = 8,
+    c_puct: float = 1.4,
+    seed: int = 0,
+) -> BaselineResult:
+    """RAP (Hao et al., 2023): MCTS with the LLM as world model + reward.
+
+    We approximate the world-model rollout by treating the policy prior as
+    the action policy and the PRM step reward as the value estimate. PUCT
+    selection drives exploration; after ``n_rollouts`` simulations we read off
+    the best plan by cumulative simulated reward.
+    """
+    prior = core.prior_logits(task, latent)
+    R = prm.step_reward_matrix(task, latent)
+    H, V = prior.shape
+    probs = softmax(prior, axis=1)
+
+    counts: Dict[tuple, np.ndarray] = {}
+    values: Dict[tuple, np.ndarray] = {}
+
+    def _puct(state: tuple) -> np.ndarray:
+        n = counts.setdefault(state, np.zeros(V, dtype=np.float64))
+        w = values.setdefault(state, np.zeros(V, dtype=np.float64))
+        total = float(n.sum()) + 1.0
+        q = w / np.maximum(n, 1.0)
+        u = c_puct * probs[len(state)] * np.sqrt(total) / (1.0 + n)
+        return q + u
+
+    best_actions: List[int] = [int(np.argmax(R[h])) for h in range(H)]
+    best_cum = -np.inf
+    for _ in range(n_rollouts):
+        state: tuple = ()
+        actions: List[int] = []
+        cum = 0.0
+        for h in range(H):
+            a = int(np.argmax(_puct(state)))
+            actions.append(a)
+            cum += float(R[h, a])
+            state = state + (a,)
+        # backup
+        s: tuple = ()
+        for a in actions:
+            counts[s][a] += 1.0
+            values[s][a] += cum
+            s = s + (a,)
+        if cum > best_cum:
+            best_cum, best_actions = cum, actions
+
+    return BaselineResult(
+        best_actions,
+        {
+            "policy_passes": 1,
+            "prm_passes": 1,
+            "samples": float(n_rollouts),
+            "verified_candidates": H * V,
+            "c_puct": float(c_puct),
+        },
+    )
+
+
+def self_refine(
+    core: CoreModel,
+    prm: ProcessRewardModel,
+    task: Task,
+    latent: np.ndarray,
+    max_iters: int = 4,
+    feedback_weight: float = 1.0,
+    seed: int = 0,
+) -> BaselineResult:
+    """Self-Refine (Madaan et al., 2023): propose -> critique -> refine loop.
+
+    Approximates the critic with the shared PRM: at each iteration we replace
+    the current action by the argmax of ``feedback_weight * PRM + log prior``
+    when that argmax differs from the current pick. Stops on the first
+    no-change iteration (convergence).
+    """
+    prior = core.prior_logits(task, latent)
+    R = prm.step_reward_matrix(task, latent)
+    H, V = prior.shape
+    log_p = np.log(softmax(prior, axis=1) + 1e-9)
+
+    actions: List[int] = [int(np.argmax(prior[h])) for h in range(H)]
+    iters_used = 0
+    for _ in range(max_iters):
+        iters_used += 1
+        changed = False
+        for h in range(H):
+            blended = feedback_weight * R[h] + log_p[h]
+            new = int(np.argmax(blended))
+            if new != actions[h]:
+                actions[h] = new
+                changed = True
+        if not changed:
+            break
+
+    return BaselineResult(
+        actions,
+        {
+            "policy_passes": 1,
+            "prm_passes": 1,
+            "samples": float(iters_used),
+            "verified_candidates": H * V,
+            "max_iters": float(max_iters),
+        },
+    )
+
+
+def s1_budget_forcing(
+    core: CoreModel,
+    prm: ProcessRewardModel,
+    task: Task,
+    latent: np.ndarray,
+    max_budget: int = 16,
+    min_budget: int = 2,
+    plurality_threshold: float = 0.70,
+    reward_temp: float = 1.0,
+    seed: int = 0,
+) -> BaselineResult:
+    """s1 budget-forcing (Muennighoff et al., 2025): controlled thinking length.
+
+    Maps the "Wait/Final-Answer" mechanism onto our candidate framework:
+    PRM-weighted sampling is drawn from ``prior * exp(reward_temp * R)`` (the
+    "thought continuation" distribution) and we keep drawing until either
+    every step reaches plurality ``plurality_threshold`` (s1 "Final Answer"
+    trigger) or the budget hits ``max_budget`` (s1 "Wait" cap).
+    """
+    prior = core.prior_logits(task, latent)
+    R = prm.step_reward_matrix(task, latent)
+    H, V = prior.shape
+    probs = softmax(prior, axis=1)
+    rng = np.random.default_rng(seed)
+
+    weights = probs * np.exp(reward_temp * R)
+    weights = weights / (weights.sum(axis=1, keepdims=True) + 1e-9)
+
+    votes = np.zeros((H, V), dtype=np.float64)
+    used = 0
+    for n in range(1, max(min_budget, max_budget) + 1):
+        used = n
+        for h in range(H):
+            a = int(rng.choice(V, p=weights[h]))
+            votes[h, a] += 1.0
+        if used < min_budget:
+            continue
+        plurality_ok = True
+        for h in range(H):
+            total = float(votes[h].sum())
+            if total <= 0 or (votes[h].max() / total) < plurality_threshold:
+                plurality_ok = False
+                break
+        if plurality_ok:
+            break
+
+    actions = [int(np.argmax(votes[h])) if votes[h].sum() else 0 for h in range(H)]
+    return BaselineResult(
+        actions,
+        {
+            "policy_passes": 1,
+            "prm_passes": 1,
+            "samples": float(used),
+            "verified_candidates": H * V,
+            "plurality_threshold": float(plurality_threshold),
+            "max_budget": float(max_budget),
+        },
+    )

@@ -3,8 +3,8 @@
 For each step ``h`` and candidate action ``v`` we ask the model whether the step
 is correct/useful and read P(yes) from the first generated token's logprobs. The
 resulting (H, V) reward field is consumed by DTO exactly like the mock PRM: the
-per-step softmax-sharpened target is the gradient (``grad_wrt_probs``), so no
-autograd is required.
+per-step softmax target is sharpened according to latent quality and used as the
+gradient (``grad_wrt_probs``), so no autograd is required.
 
 Reuse the policy's vLLM handle (`core.llm`) to avoid loading a second model, or
 pass ``model_name`` to load a dedicated PRM (e.g. a Math-PRM). Lazy imports; GPU
@@ -14,7 +14,7 @@ only.
 from __future__ import annotations
 
 import hashlib
-from typing import List, Optional, Sequence
+from typing import Callable, List, Optional, Sequence
 
 import numpy as np
 
@@ -30,6 +30,8 @@ class LLMAsProcessReward:
         core=None,                     # reuse a VLLMCoreModel's llm/tokenizer
         model_name: Optional[str] = None,
         sharpness: float = 4.0,
+        latent_quality_gain: float = 0.5,
+        latent_quality_fn: Optional[Callable[[np.ndarray], float]] = None,
         yes_tokens: Sequence[str] = (" yes", "yes", "Yes", " Yes"),
         no_tokens: Sequence[str] = (" no", "no", "No", " No"),
     ):
@@ -42,11 +44,32 @@ class LLMAsProcessReward:
         else:
             raise ValueError("provide either `core` or `model_name`")
         self.sharpness = sharpness
+        self.latent_quality_gain = latent_quality_gain
+        self._latent_quality_fn = latent_quality_fn
         self._yes = self._ids(yes_tokens)
         self._no = self._ids(no_tokens)
         self._reward_cache: dict[tuple[str, str, int, int], np.ndarray] = {}
         self._target_cache: dict[tuple[str, str, int, int], np.ndarray] = {}
         self.n_prompt_tokens = 0
+
+    def set_latent_quality_fn(self, fn: Callable[[np.ndarray], float]) -> None:
+        self._latent_quality_fn = fn
+        self._target_cache.clear()
+
+    def latent_quality(self, latent: np.ndarray) -> float:
+        fn = getattr(self, "_latent_quality_fn", None)
+        if fn is not None:
+            q = float(fn(latent))
+        else:
+            h = np.asarray(latent, dtype=np.float64).reshape(-1)
+            q = float(np.tanh(np.linalg.norm(h) / (np.sqrt(h.size) + 1e-9)))
+        return float(np.clip(q, 0.0, 1.0))
+
+    def effective_sharpness(self, latent: np.ndarray) -> float:
+        gain = float(getattr(self, "latent_quality_gain", 0.5))
+        q = self.latent_quality(latent)
+        scale = 1.0 + gain * (2.0 * q - 1.0)
+        return float(self.sharpness * max(scale, 0.1))
 
     def _ids(self, toks: Sequence[str]) -> List[int]:
         out = []
@@ -153,7 +176,7 @@ class LLMAsProcessReward:
             return cached.copy()
 
         R = self.step_reward_matrix(task, latent)
-        z = self.sharpness * R
+        z = self.effective_sharpness(latent) * R
         z = z - z.max(axis=1, keepdims=True)
         e = np.exp(z)
         target = e / e.sum(axis=1, keepdims=True)

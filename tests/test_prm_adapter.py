@@ -9,6 +9,8 @@ from acdan.types import Task, softmax
 class CountingLLMPRM(LLMAsProcessReward):
     def __init__(self):
         self.sharpness = 4.0
+        self.latent_quality_gain = 0.5
+        self._latent_quality_fn = None
         self._yes = []
         self._no = []
         self._reward_cache = {}
@@ -95,3 +97,20 @@ def test_llm_prm_math_bonus_is_off_by_default():
     )
     R = prm.step_reward_matrix(task, np.ones(4))
     assert np.isclose(R[0, 1], R[0, 0])
+
+
+def test_llm_prm_latent_quality_modulates_target_sharpness():
+    class FixedRewardPRM(CountingLLMPRM):
+        def step_reward_matrix(self, task, latent):
+            return np.asarray([[0.0, 0.5, 1.0]], dtype=np.float64)
+
+    prm = FixedRewardPRM()
+    prm.set_latent_quality_fn(lambda latent: float(np.asarray(latent)[0]))
+    task = _task()
+    probs = softmax(np.zeros((task.horizon, task.vocab_size)), axis=1)
+
+    low = prm.grad_wrt_probs(task, np.asarray([0.0]), probs)[0]
+    high = prm.grad_wrt_probs(task, np.asarray([1.0]), probs)[0]
+
+    assert prm.effective_sharpness(np.asarray([1.0])) > prm.effective_sharpness(np.asarray([0.0]))
+    assert high[-1] - high[0] > low[-1] - low[0]
