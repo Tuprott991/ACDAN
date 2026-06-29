@@ -1,0 +1,28 @@
+{
+  "summary": {
+    "method": "acdan",
+    "dataset": "bfcl",
+    "policy": "vllm",
+    "policy_model": "Qwen/Qwen2.5-7B-Instruct",
+    "prm": "llm",
+    "seed": 0,
+    "math_evidence": null,
+    "dto_self_consistency_weight": 0.0,
+    "inertia_fit_path": "data/bfcl_dev.jsonl",
+    "n_tasks": 2600,
+    "accuracy": 0.8988461538461539,
+    "coverage": 1.0,
+    "selective_accuracy": 0.8988461538461539,
+    "ece": 0.04329060005416091,
+    "mean_latency_s": 0.14917083595807737,
+    "wall_s": 387.85300028603524,
+    "mean_real_prompt_tokens": 1587.3492307692309,
+    "total_real_prompt_tokens": 4127108,
+    "mean_token_surrogate": 1.2903846153846155,
+    "mean_samples": 1.0,
+    "mean_verified_candidates": 3.1,
+    "mean_prm_passes": 1.0,
+    "mean_vocab_size": 2.6123205187586844
+  },
+  "per_task": []
+}
