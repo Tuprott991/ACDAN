@@ -1,0 +1,32 @@
+{
+  "summary": {
+    "method": "asc",
+    "dataset": "math500",
+    "policy": "vllm",
+    "policy_model": "Qwen/Qwen2.5-7B-Instruct",
+    "prm": "llm",
+    "seed": 0,
+    "math_evidence": "none",
+    "dto_self_consistency_weight": 0.0,
+    "inertia_fit_path": null,
+    "n_tasks": 500,
+    "accuracy": 0.528,
+    "coverage": 1.0,
+    "selective_accuracy": 0.528,
+    "ece": 0.472,
+    "mean_latency_s": 0.00023698787204921246,
+    "wall_s": 0.11931820586323738,
+    "mean_real_prompt_tokens": 0.0,
+    "total_real_prompt_tokens": 0,
+    "mean_token_surrogate": 5.328,
+    "mean_samples": 5.328,
+    "mean_verified_candidates": 0.0,
+    "mean_prm_passes": 0.0,
+    "mean_vocab_size": 4.682,
+    "oracle_candidate_accuracy": 0.598,
+    "always_first_accuracy": 0.434,
+    "always_last_accuracy": 0.286,
+    "highest_count_accuracy": 0.528
+  },
+  "per_task": []
+}
