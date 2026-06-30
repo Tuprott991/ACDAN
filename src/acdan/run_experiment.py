@@ -56,13 +56,19 @@ _ABLATION_ALIAS = {
 
 # --------------------------------------------------------------------- build
 
-def _build_core(name: str, model: Optional[str], seed: int):
+def _build_core(name: str, model: Optional[str], args: argparse.Namespace):
     if name == "mock":
         from acdan.registry import build_core_model
-        return build_core_model("mock", seed=seed)
+        return build_core_model("mock", seed=args.seed)
     if name == "vllm":
         from acdan.backends.vllm_core import VLLMCoreModel
-        return VLLMCoreModel(model_name=model, seed=seed)
+        return VLLMCoreModel(
+            model_name=model,
+            max_model_len=args.vllm_max_model_len,
+            dtype=args.vllm_dtype,
+            gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+            seed=args.seed,
+        )
     raise KeyError(f"unknown policy '{name}'")
 
 
@@ -91,13 +97,16 @@ def _build_encoder(args: argparse.Namespace):
         model_name = args.encoder_model or args.policy_model
         if not model_name:
             raise ValueError("--encoder hf requires --encoder-model or --policy-model")
+        device = args.encoder_device
+        if device is None and args.policy == "vllm":
+            device = "cpu"
         return build_encoder(
             "hf",
             model_name=model_name,
             mode=args.encoder_mode,
             pooling=args.encoder_pooling,
             dtype=args.encoder_dtype,
-            device=args.encoder_device,
+            device=device,
             max_length=args.encoder_max_length,
             trust_remote_code=args.trust_remote_code,
         )
@@ -178,8 +187,8 @@ def run(args: argparse.Namespace) -> dict:
             flags[field] = False
         config = dataclasses.replace(config, ablation=AblationFlags(**flags))
 
+    core = _build_core(args.policy, args.policy_model, args)
     encoder = _build_encoder(args)
-    core = _build_core(args.policy, args.policy_model, args.seed)
     prm = _build_prm(args.prm, args.prm_model, core, args.seed)
     reasoner = LatentReasoner(config.latent, feature_dim=encoder.dim, seed=args.seed)
     if hasattr(prm, "set_latent_quality_fn"):
@@ -397,6 +406,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=None, help="Max tasks.")
     p.add_argument("--policy", default="mock", choices=["mock", "vllm"])
     p.add_argument("--policy-model", default=None, help="HF id for vLLM policy.")
+    p.add_argument("--vllm-max-model-len", type=int, default=4096)
+    p.add_argument("--vllm-dtype", default="bfloat16")
+    p.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.90)
     p.add_argument("--prm", default="mock", choices=["mock", "llm"])
     p.add_argument("--prm-model", default=None, help="HF id for a dedicated PRM.")
     p.add_argument("--encoder", default="hash", choices=["hash", "st", "hf"])

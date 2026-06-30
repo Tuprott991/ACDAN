@@ -9,7 +9,7 @@ MODEL=${MODEL:-Qwen/Qwen2.5-7B-Instruct}
 TAG=${TAG:-qwen7b}
 SEEDS=${SEEDS:-"0 1 2"}
 N_VALUES=${N_VALUES:-"1 2 4 8 16"}
-ENCODER_ARGS=${ENCODER_ARGS:-"--encoder hf --encoder-mode last_hidden --encoder-pooling last --encoder-dtype bfloat16 --encoder-max-length 2048"}
+ENCODER_ARGS=${ENCODER_ARGS:-"--encoder hf --encoder-mode last_hidden --encoder-pooling last --encoder-dtype bfloat16 --encoder-device cpu --encoder-max-length 2048"}
 read -r -a ENCODER_ARGV <<< "$ENCODER_ARGS"
 
 mkdir -p results/approval

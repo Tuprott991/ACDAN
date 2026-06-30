@@ -106,7 +106,8 @@ head:
 python -m acdan.run_experiment --method acdan --dataset bfcl \
   --data-path data/bfcl_full.jsonl \
   --policy vllm --policy-model Qwen/Qwen2.5-7B-Instruct --prm llm \
-  --encoder hf --encoder-mode last_hidden --encoder-pooling last
+  --encoder hf --encoder-mode last_hidden --encoder-pooling last \
+  --encoder-dtype bfloat16 --encoder-device cpu
 ```
 
 This grounds ACDAN's latent state in the policy-model family, but it remains

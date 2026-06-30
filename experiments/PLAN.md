@@ -36,7 +36,7 @@ Measure real throughput before full runs:
 
 ```bash
 ENCODER_ARGS="--encoder hf --encoder-mode last_hidden --encoder-pooling last \
-  --encoder-dtype bfloat16 --encoder-max-length 2048"
+  --encoder-dtype bfloat16 --encoder-device cpu --encoder-max-length 2048"
 
 .venv/bin/python -m acdan.run_experiment --method acdan --dataset bfcl \
   --data-path data/bfcl_full.jsonl --limit 50 \
@@ -58,14 +58,22 @@ Alternative low-memory latent encoder smoke test:
   --data-path data/bfcl_full.jsonl --limit 25 \
   --policy vllm --policy-model Qwen/Qwen2.5-7B-Instruct --prm llm \
   --encoder hf --encoder-mode input_emb --encoder-pooling mean \
-  --encoder-dtype bfloat16 --encoder-max-length 2048 \
+  --encoder-dtype bfloat16 --encoder-device cpu --encoder-max-length 2048 \
   --out results/_smoke_bfcl_hfencoder_lowmem.json
 ```
 
 Memory caveat: with `--policy vllm --encoder hf`, the model may be loaded once
 by vLLM for action scoring and once by Transformers for hidden-state features.
-Use a smaller encoder model, `--encoder-mode input_emb`, CPU offload, or a
-separate VM if the policy model already fills the GPU.
+The commands above use `--encoder-device cpu` so the HF encoder does not steal
+GPU memory before vLLM starts. If you intentionally run the HF encoder on GPU,
+also reduce vLLM's reservation, for example
+`--vllm-gpu-memory-utilization 0.55`, or use a smaller `--encoder-model`.
+
+If vLLM fails at startup with `RuntimeError: Engine core initialization failed`,
+first rerun with `--encoder-device cpu`; then try lowering
+`--vllm-gpu-memory-utilization`, `--vllm-max-model-len`, or using
+`--encoder-mode input_emb`. Use `--encoder hash` only as a diagnostic smoke test,
+not for headline latent/TTT claims.
 
 ---
 
@@ -178,12 +186,13 @@ Use HF causal-LLM features for all real reported runs:
 
 ```bash
 ENCODER_ARGS="--encoder hf --encoder-mode last_hidden --encoder-pooling last \
-  --encoder-dtype bfloat16 --encoder-max-length 2048"
+  --encoder-dtype bfloat16 --encoder-device cpu --encoder-max-length 2048"
 ```
 
-If VRAM is tight, use `--encoder-mode input_emb --encoder-pooling mean`, a
-smaller `--encoder-model`, or run a named low-memory ablation. Do not silently
-fall back to `--encoder hash` for headline latent/TTT claims.
+If runtime or memory is tight, use `--encoder-mode input_emb --encoder-pooling
+mean`, lower `--vllm-gpu-memory-utilization`, use a smaller `--encoder-model`,
+or run a named low-memory ablation. Do not silently fall back to `--encoder hash`
+for headline latent/TTT claims.
 
 Primary methods: `acdan`, `bon`, `asc`, `sc`, `cot`. `asc` is an early-stopping
 self-consistency baseline: it stops once the plurality answer reaches a
@@ -203,7 +212,7 @@ DTO count prior.
 
 ```bash
 M=Qwen/Qwen2.5-7B-Instruct; TAG=qwen7b; D=data/gsm8k_${TAG}_k8_sample.jsonl
-ENCODER_ARGS="--encoder hf --encoder-mode last_hidden --encoder-pooling last --encoder-dtype bfloat16 --encoder-max-length 2048"
+ENCODER_ARGS="--encoder hf --encoder-mode last_hidden --encoder-pooling last --encoder-dtype bfloat16 --encoder-device cpu --encoder-max-length 2048"
 for METHOD in acdan bon asc sc cot; do
   .venv/bin/python -m acdan.run_experiment --method $METHOD --dataset gsm8k \
     --data-path $D --policy vllm --policy-model $M --prm llm \
@@ -241,7 +250,7 @@ Full approval matrix with per-task artifacts and Pareto collection:
 
 ```bash
 MODEL=Qwen/Qwen2.5-7B-Instruct TAG=qwen7b \
-  ENCODER_ARGS="--encoder hf --encoder-mode last_hidden --encoder-pooling last --encoder-dtype bfloat16 --encoder-max-length 2048" \
+  ENCODER_ARGS="--encoder hf --encoder-mode last_hidden --encoder-pooling last --encoder-dtype bfloat16 --encoder-device cpu --encoder-max-length 2048" \
   experiments/run_approval_matrix.sh
 ```
 
@@ -275,7 +284,7 @@ or omit it; the runner no longer fits from evaluation gold.
 
 ```bash
 M=Qwen/Qwen2.5-7B-Instruct; TAG=qwen7b
-ENCODER_ARGS="--encoder hf --encoder-mode last_hidden --encoder-pooling last --encoder-dtype bfloat16 --encoder-max-length 2048"
+ENCODER_ARGS="--encoder hf --encoder-mode last_hidden --encoder-pooling last --encoder-dtype bfloat16 --encoder-device cpu --encoder-max-length 2048"
 TRAIN=data/bfcl_dev.jsonl 
 TEST=data/bfcl_full.jsonl
 

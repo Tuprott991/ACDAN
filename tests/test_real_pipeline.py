@@ -170,6 +170,33 @@ def test_hf_encoder_defaults_to_policy_model(monkeypatch):
     assert captured["kwargs"]["max_length"] == 512
 
 
+def test_hf_encoder_defaults_to_cpu_with_vllm_policy(monkeypatch):
+    captured = {}
+
+    class DummyEncoder:
+        dim = 7
+
+    def fake_build_encoder(kind, **kwargs):
+        captured["kind"] = kind
+        captured["kwargs"] = kwargs
+        return DummyEncoder()
+
+    import acdan.backends.encoder as encoder_mod
+
+    monkeypatch.setattr(encoder_mod, "build_encoder", fake_build_encoder)
+    args = build_parser().parse_args([
+        "--policy", "vllm",
+        "--policy-model", "Qwen/Qwen2.5-7B-Instruct",
+        "--encoder", "hf",
+    ])
+
+    _build_encoder(args)
+
+    assert captured["kind"] == "hf"
+    assert captured["kwargs"]["model_name"] == "Qwen/Qwen2.5-7B-Instruct"
+    assert captured["kwargs"]["device"] == "cpu"
+
+
 def test_runner_end_to_end_mock(tmp_path):
     out = tmp_path / "r.json"
     args = build_parser().parse_args(
