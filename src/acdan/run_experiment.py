@@ -170,7 +170,34 @@ def _dataset_kwargs(args: argparse.Namespace) -> dict:
 
 # --------------------------------------------------------------------- run
 
+def _monitor(args: argparse.Namespace, message: str) -> None:
+    if getattr(args, "monitor", False):
+        print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
+
+
+def _should_log_progress(args: argparse.Namespace, index: int, total: int) -> bool:
+    if not getattr(args, "monitor", False):
+        return False
+    every = max(1, int(getattr(args, "progress_every", 25)))
+    return index == 1 or index == total or index % every == 0
+
+
+def _preview(text: str, n: int) -> str:
+    if n <= 0:
+        return ""
+    compact = " ".join(str(text).split())
+    return compact[:n] + ("..." if len(compact) > n else "")
+
+
 def run(args: argparse.Namespace) -> dict:
+    run_t0 = time.perf_counter()
+    _monitor(
+        args,
+        (
+            f"start method={args.method} dataset={args.dataset} policy={args.policy} "
+            f"encoder={args.encoder} limit={args.limit or 'all'}"
+        ),
+    )
     config = ACDANConfig(name=args.method, seed=args.seed)
     if args.disable:
         flags = dataclasses.asdict(AblationFlags())
@@ -187,9 +214,29 @@ def run(args: argparse.Namespace) -> dict:
             flags[field] = False
         config = dataclasses.replace(config, ablation=AblationFlags(**flags))
 
+    _monitor(args, f"loading core policy={args.policy} model={args.policy_model or 'mock'}")
+    t_stage = time.perf_counter()
     core = _build_core(args.policy, args.policy_model, args)
+    _monitor(args, f"loaded core in {time.perf_counter() - t_stage:.1f}s")
+
+    encoder_model = args.encoder_model or (args.policy_model if args.encoder == "hf" else None)
+    encoder_device = args.encoder_device or ("cpu" if args.encoder == "hf" and args.policy == "vllm" else "auto")
+    _monitor(
+        args,
+        (
+            f"loading encoder={args.encoder} model={encoder_model or 'default'} "
+            f"device={encoder_device} mode={args.encoder_mode}"
+        ),
+    )
+    t_stage = time.perf_counter()
     encoder = _build_encoder(args)
+    _monitor(args, f"loaded encoder dim={encoder.dim} in {time.perf_counter() - t_stage:.1f}s")
+
+    _monitor(args, f"loading prm={args.prm} model={args.prm_model or 'shared/mock'}")
+    t_stage = time.perf_counter()
     prm = _build_prm(args.prm, args.prm_model, core, args.seed)
+    _monitor(args, f"loaded prm in {time.perf_counter() - t_stage:.1f}s")
+
     reasoner = LatentReasoner(config.latent, feature_dim=encoder.dim, seed=args.seed)
     if hasattr(prm, "set_latent_quality_fn"):
         prm.set_latent_quality_fn(reasoner.quality)
@@ -201,25 +248,55 @@ def run(args: argparse.Namespace) -> dict:
             dto=dataclasses.replace(config.dto, self_consistency_weight=dto_sc),
         )
 
+    _monitor(args, f"building dataset adapter path={args.data_path or 'default'}")
     dataset = build_dataset(
         args.dataset, path=args.data_path, limit=args.limit, **_dataset_kwargs(args)
     )
     checker = build_outcome_checker(args.dataset)
-    tasks = [_to_task(r, encoder.encode(r.prompt)) for r in dataset.tasks()]
+    _monitor(args, "reading raw tasks")
+    t_stage = time.perf_counter()
+    raw_tasks = list(dataset.tasks())
+    _monitor(args, f"read {len(raw_tasks)} raw tasks in {time.perf_counter() - t_stage:.1f}s")
+
+    tasks: List[Task] = []
+    total_raw = len(raw_tasks)
+    t_stage = time.perf_counter()
+    for i, raw in enumerate(raw_tasks, start=1):
+        if _should_log_progress(args, i, total_raw):
+            msg = (
+                f"rendering/encoding prompt {i}/{total_raw} "
+                f"task_id={raw.task_id} chars={len(raw.prompt)} H={raw.horizon} V={len(raw.vocab)}"
+            )
+            prev = _preview(raw.prompt, args.prompt_preview_chars)
+            if prev:
+                msg += f" preview={prev!r}"
+            _monitor(args, msg)
+        tasks.append(_to_task(raw, encoder.encode(raw.prompt)))
+    _monitor(args, f"encoded {len(tasks)} tasks in {time.perf_counter() - t_stage:.1f}s")
 
     sensors = {}
     if args.method == "acdan" and args.fit_inertia:
         if args.inertia_fit_path:
+            _monitor(args, f"fitting inertia from {args.inertia_fit_path}")
             fit_dataset = build_dataset(
                 args.dataset,
                 path=args.inertia_fit_path,
                 limit=args.inertia_fit_limit,
                 **_dataset_kwargs(args),
             )
-            fit_tasks = [_to_task(r, encoder.encode(r.prompt)) for r in fit_dataset.tasks()]
+            fit_raw = list(fit_dataset.tasks())
+            fit_tasks = []
+            total_fit = len(fit_raw)
+            for i, raw in enumerate(fit_raw, start=1):
+                if _should_log_progress(args, i, total_fit):
+                    _monitor(args, f"encoding inertia prompt {i}/{total_fit} task_id={raw.task_id}")
+                fit_tasks.append(_to_task(raw, encoder.encode(raw.prompt)))
             sensors = _fit_inertia(fit_tasks, config)
+            _monitor(args, f"fit inertia sensors for families={sorted(sensors)}")
         elif args.dataset == "synthetic":
+            _monitor(args, "fitting inertia from synthetic evaluation tasks")
             sensors = _fit_inertia(tasks, config)
+            _monitor(args, f"fit inertia sensors for families={sorted(sensors)}")
         else:
             print(
                 "warning: --fit-inertia ignored without --inertia-fit-path; "
@@ -230,13 +307,24 @@ def run(args: argparse.Namespace) -> dict:
     independent = None
     if args.verifier == "claude":
         from acdan.backends.claude import ClaudeIndependentVerifier
+        _monitor(args, f"loading independent verifier model={args.judge_model}")
         independent = ClaudeIndependentVerifier(model=args.judge_model)
     verifier = SelfVerifier(config.verification, probe=None, independent=independent)
 
     t0 = time.perf_counter()
     rows: List[dict] = []
     base_tokens = getattr(core, "n_prompt_tokens", 0) + getattr(prm, "n_prompt_tokens", 0)
-    for task in tasks:
+    total_tasks = len(tasks)
+    _monitor(args, f"starting evaluation tasks={total_tasks}")
+    for task_idx, task in enumerate(tasks, start=1):
+        if _should_log_progress(args, task_idx, total_tasks):
+            _monitor(
+                args,
+                (
+                    f"processing task {task_idx}/{total_tasks} task_id={task.task_id} "
+                    f"H={task.horizon} V={task.vocab_size}"
+                ),
+            )
         ts = time.perf_counter()
         if args.method == "acdan":
             agent = ACDANAgent(config, core, prm, reasoner, verifier, sensors,
@@ -322,6 +410,17 @@ def run(args: argparse.Namespace) -> dict:
             "verified_candidates": float(cost_info.get("verified_candidates", 0.0)),
         })
         base_tokens = cur_tokens
+        if _should_log_progress(args, task_idx, total_tasks):
+            elapsed = time.perf_counter() - t0
+            acc_so_far = float(np.mean([r["correct"] for r in rows])) if rows else 0.0
+            _monitor(
+                args,
+                (
+                    f"finished task {task_idx}/{total_tasks} correct={bool(correct)} "
+                    f"latency={rows[-1]['latency_s']:.2f}s acc_so_far={acc_so_far:.3f} "
+                    f"elapsed={elapsed:.1f}s"
+                ),
+            )
 
     wall = time.perf_counter() - t0
     n = len(rows)
@@ -386,6 +485,8 @@ def run(args: argparse.Namespace) -> dict:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
         with open(args.out, "w", encoding="utf-8") as fh:
             json.dump(out, fh, indent=2)
+        _monitor(args, f"wrote results -> {args.out}")
+    _monitor(args, f"complete wall_eval={wall:.1f}s wall_total={time.perf_counter() - run_t0:.1f}s")
     print(json.dumps(summary, indent=2))
     return out
 
@@ -461,6 +562,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--inertia-fit-path", default=None, help="Train/dev JSONL for fitting inertia.")
     p.add_argument("--inertia-fit-limit", type=int, default=None)
     p.add_argument("--save-per-task", action="store_true")
+    p.add_argument(
+        "--monitor",
+        action="store_true",
+        help="Print timestamped stage/progress logs during loading, encoding, and evaluation.",
+    )
+    p.add_argument(
+        "--progress-every",
+        type=int,
+        default=25,
+        help="With --monitor, print prompt/task progress every N items.",
+    )
+    p.add_argument(
+        "--prompt-preview-chars",
+        type=int,
+        default=0,
+        help="With --monitor, include a compact prompt preview of this many chars.",
+    )
     p.add_argument("--out", default=None)
     return p
 

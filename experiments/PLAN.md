@@ -42,6 +42,7 @@ ENCODER_ARGS="--encoder hf --encoder-mode last_hidden --encoder-pooling last \
   --data-path data/bfcl_full.jsonl --limit 50 \
   --policy vllm --policy-model Qwen/Qwen2.5-7B-Instruct --prm llm \
   $ENCODER_ARGS \
+  --monitor --progress-every 10 \
   --out results/_smoke_bfcl.json --save-per-task
 ```
 
@@ -217,6 +218,7 @@ for METHOD in acdan bon asc sc cot; do
   .venv/bin/python -m acdan.run_experiment --method $METHOD --dataset gsm8k \
     --data-path $D --policy vllm --policy-model $M --prm llm \
     $ENCODER_ARGS \
+  --monitor --progress-every 10 \
     --math-evidence none --n 8 --seed 0 \
     --out results/gsm8k_${TAG}_${METHOD}.json
 done
@@ -229,6 +231,7 @@ for METHOD in tot rap refine s1; do
   .venv/bin/python -m acdan.run_experiment --method $METHOD --dataset gsm8k \
     --data-path $D --policy vllm --policy-model $M --prm llm \
     $ENCODER_ARGS \
+  --monitor --progress-every 10 \
     --math-evidence none --n 8 --seed 0 \
     --out results/gsm8k_${TAG}_${METHOD}.json
 done
@@ -241,6 +244,7 @@ for EVID in none prompt prm dto all; do
   .venv/bin/python -m acdan.run_experiment --method acdan --dataset gsm8k \
     --data-path $D --policy vllm --policy-model $M --prm llm \
     $ENCODER_ARGS \
+  --monitor --progress-every 10 \
     --math-evidence $EVID --math-count-weight 0.35 \
     --out results/gsm8k_${TAG}_evidence_${EVID}.json
 done
@@ -268,6 +272,7 @@ for ABL in no_dto no_verification no_latent no_ttt; do
   .venv/bin/python -m acdan.run_experiment --method acdan --disable $ABL \
     --dataset gsm8k --data-path $D --policy vllm --policy-model $M --prm llm \
     $ENCODER_ARGS \
+  --monitor --progress-every 10 \
     --math-evidence none --out results/gsm8k_${TAG}_abl_${ABL}.json
 done
 ```
@@ -292,6 +297,7 @@ for METHOD in acdan bon asc sc cot; do
   .venv/bin/python -m acdan.run_experiment --method $METHOD --dataset bfcl \
     --data-path $TEST --policy vllm --policy-model $M --prm llm \
     $ENCODER_ARGS \
+  --monitor --progress-every 10 \
     --n 8 --seed 0 \
     --fit-inertia --inertia-fit-path $TRAIN \
     --out results/bfcl_${TAG}_${METHOD}.json
@@ -305,6 +311,7 @@ for METHOD in tot rap refine s1; do
   .venv/bin/python -m acdan.run_experiment --method $METHOD --dataset bfcl \
     --data-path $TEST --policy vllm --policy-model $M --prm llm \
     $ENCODER_ARGS \
+  --monitor --progress-every 10 \
     --n 8 --seed 0 \
     --out results/bfcl_${TAG}_${METHOD}.json
 done
@@ -317,6 +324,7 @@ for ABL in no_dto no_graph no_inertia no_verification no_latent no_ttt; do
   .venv/bin/python -m acdan.run_experiment --method acdan --disable $ABL \
     --dataset bfcl --data-path $TEST --policy vllm --policy-model $M --prm llm \
     $ENCODER_ARGS \
+  --monitor --progress-every 10 \
     --n 8 --seed 0 --fit-inertia --inertia-fit-path $TRAIN \
     --out results/bfcl_${TAG}_abl_${ABL}.json
 done
@@ -328,6 +336,7 @@ Calibration study:
 .venv/bin/python -m acdan.run_experiment --method acdan --dataset bfcl \
   --data-path $TEST --policy vllm --policy-model $M --prm llm \
   $ENCODER_ARGS \
+  --monitor --progress-every 10 \
   --verifier claude --judge-model claude-opus-4-8 \
   --fit-inertia --inertia-fit-path $TRAIN \
   --out results/bfcl_${TAG}_acdan_claudeverify.json
@@ -425,3 +434,4 @@ Offline PS-GRPO remains available for module learning curves:
 Report `eval_acc_final` and the learning curve. Real LLM policy training still
 requires an `LLMPolicyHead`/LoRA implementation behind the existing trainer
 interfaces.
+

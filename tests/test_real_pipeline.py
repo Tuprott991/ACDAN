@@ -216,6 +216,22 @@ def test_runner_baseline_mock():
     assert res["summary"]["n_tasks"] == 8
 
 
+def test_runner_monitor_logs_progress(capsys):
+    args = build_parser().parse_args([
+        "--method", "acdan",
+        "--dataset", "synthetic",
+        "--limit", "3",
+        "--monitor",
+        "--progress-every", "2",
+    ])
+    run(args)
+    out = capsys.readouterr().out
+    assert "loading core" in out
+    assert "rendering/encoding prompt 1/3" in out
+    assert "processing task 1/3" in out
+    assert "complete wall_eval" in out
+
+
 def test_runner_adaptive_sc_mock():
     args = build_parser().parse_args(
         ["--method", "asc", "--dataset", "synthetic", "--limit", "8", "--n", "4"])
