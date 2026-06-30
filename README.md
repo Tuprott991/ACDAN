@@ -4,15 +4,22 @@
 > core ideas from the AAAI-2027 proposal *"Adaptive Calibrated Differentiable
 > Agentic Networks: A New Direction for Universal Test-Time Agentic Systems."*
 
-ACDAN unifies four mechanisms into one test-time agent:
+ACDAN is best understood as an **agentic test-time controller**, not a
+replacement foundation model. It wraps a base LLM / agent policy that can score a
+finite set of candidate actions or plans, then uses process reward, graph
+control, and calibration to pick a better action sequence.
+
+ACDAN unifies four mechanisms into one controller:
 **(1) latent-space reasoning + in-place test-time training**,
 **(2) Differentiable Textual Optimization (DTO)** over soft action logits,
 **(3) a dynamic two-layer agentic computation graph** (execution + dependency)
 with dead-step pruning and **Tool-Usage Inertia**, and
 **(4) self-verification with confidence calibration (RLCM / independent asking)**.
 
-Everything runs locally with only `numpy` + `PyYAML`. **No datasets or model
-weights are downloaded** — real backends drop in behind small interfaces.
+The offline core runs locally with only `numpy` + `PyYAML`. Real experiments use
+optional lazy backends (`vLLM`, sentence-transformers, Anthropic/Claude) behind
+small interfaces. No model weights or benchmark files are downloaded by the core
+package; point the runner at local data files under `data/`.
 
 ---
 
@@ -23,8 +30,8 @@ weights are downloaded** — real backends drop in behind small interfaces.
 - [Installation](#installation)
 - [Offline demo](#offline-demo)
 - [Example commands & expected outputs](#example-commands--expected-outputs)
-- [Reproducible results](#reproducible-results)
-- [Adding real datasets / models later](#adding-real-datasets--models-later)
+- [Current evidence](#current-evidence)
+- [Real datasets / models](#real-datasets--models)
 - [Repository layout](#repository-layout)
 - [Rebuttal-round checklist](#rebuttal-round-checklist)
 - [What is and is not implemented](#what-is-and-is-not-implemented)
@@ -38,7 +45,8 @@ Test-time scaling for agents is bottlenecked by three problems the proposal
 targets directly:
 
 1. **Discrete search is wasteful** (MCTS / Best-of-N explode compute). ACDAN
-   replaces it with **continuous, differentiable** refinement of the action plan.
+   replaces repeated discrete rollouts with **continuous, differentiable**
+   refinement over a task-defined action/candidate space.
 2. **Overthinking** — long reasoning hurts accuracy and burns tokens. ACDAN
    models the workflow as a **dependency graph** and prunes redundant "dead"
    steps, and reuses familiar tool transitions via **inertia**.
@@ -46,29 +54,47 @@ targets directly:
    ACDAN attaches an **RLCM confidence probe**, a **margin** score, and an
    **independent verifier** for risk-controlled accept/abstain.
 
-This repo implements those mechanisms as small, testable, numpy algorithms so the
-*ideas* are demonstrable offline, and so a real LLM/PRM can be swapped in without
-touching the architecture.
+This repo implements those mechanisms as small, testable algorithms and exposes a
+real experiment runner. The strongest current evidence is for ACDAN as a
+controller on top of an agentic pipeline: DTO improves action/tool selection, and
+verification improves calibration.
 
 ## Architecture overview
 
+```text
+task / agent state
+  -> candidate actions or candidate plan steps (H x V)
+  -> prompt features / encoder state
+  -> Latent Reasoning (+ optional In-Place TTT)
+  -> Core-model prior logits L0
+          |
+          +-> DTO: L <- L - eta * grad J(L)
+          |       J = -ll - alpha*R_prm + beta*len - gamma*H_dep
+          |
+          +-> optional Inertial Sensing for familiar transitions
+                  |
+                  v
+            executed action plan
+                  |
+                  v
+            Two-layer Agentic Computation Graph (EX + ED)
+            - exact vN entropy for reporting
+            - differentiable entropy surrogate for DTO
+            - dead-step pruning / cost accounting
+                  |
+                  v
+            Self-Verification & Calibration
+            - confidence probe or margin fallback
+            - optional independent verifier
+            - accept / abstain / ECE
+                  |
+                  v
+            RolloutMetrics + per-method cost fields
 ```
-features ─▶ Latent Reasoning (+In-Place TTT) ─▶ Core-Model prior logits L0
-                                                     │
-                          ┌──────────────────────────┴───────────────────────┐
-                          ▼                                                    ▼
-             Inertial Sensing (skip LLM plan)                 DTO: L ← L − η∇J(L)
-             for high-inertia tool transitions     J = −ll −αR_prm +β·len −γ·H_dep
-                          └──────────────────────────┬───────────────────────┘
-                                                     ▼ executed actions
-                  Two-layer Agentic Computation Graph (EX + ED)
-                  • von Neumann entropy   • prune dead steps (DECS)
-                                                     ▼
-                  Self-Verification & Calibration (RLCM)
-                  • confidence probe • margin • independent ask → accept/abstain
-                                                     ▼
-                                              RolloutMetrics
-```
+
+ACDAN requires a finite candidate/action space. For raw free-form text
+generation, wrap the LLM output into candidates first (for example answer
+selection, tool selection, workflow-step selection, or reranking).
 
 Full details: [`docs/architecture.md`](docs/architecture.md) and the formal
 objective / update rules in [`docs/math.md`](docs/math.md).
@@ -80,17 +106,17 @@ objective / update rules in [`docs/math.md`](docs/math.md).
 | Latent reasoning (recurrent unroll) | [`latent_reasoning.py`](src/acdan/latent_reasoning.py) | implemented |
 | In-Place TTT | `latent_reasoning.LatentReasoner._ttt_adapt` | implemented |
 | Differentiable Textual Optimization | [`dto.py`](src/acdan/dto.py) | implemented (analytic grads) |
-| Process Reward Model (TIM-PRM/Athena) | [`rewards.py`](src/acdan/rewards.py) | **mock** behind interface |
+| Process Reward Model / LLM-as-PRM | [`rewards.py`](src/acdan/rewards.py), [`prm_adapter.py`](src/acdan/backends/prm_adapter.py) | mock + vLLM-backed adapter |
 | Net Information Gain (O(N)) | `rewards.net_information_gain` | implemented |
 | Two-layer graph (EX + ED) | [`graph.py`](src/acdan/graph.py) | implemented |
 | von Neumann entropy / diversity | `graph.von_neumann_entropy`, `make_entropy_hook` | implemented (exact + surrogate) |
 | Dead-step pruning (DECS) | `graph.AgenticComputationGraph.prune` | implemented |
 | Tool Usage Inertia | [`inertia.py`](src/acdan/inertia.py) | implemented |
-| Independent Question Asking | `verification.IndependentVerifier` | **mock** behind interface |
+| Independent Question Asking | `verification.IndependentVerifier`, [`claude.py`](src/acdan/backends/claude.py) | mock + optional Claude backend |
 | RLCM confidence probe + margin | [`verification.py`](src/acdan/verification.py) | implemented |
 | Calibration (ECE) | `verification.expected_calibration_error` | implemented |
-| Core LLM action head | [`registry.py`](src/acdan/registry.py) | **mock** behind interface |
-| Datasets (GAIA/GSM8K/…) | [`tasks/synthetic.py`](src/acdan/tasks/synthetic.py) | synthetic stand-ins |
+| Core LLM action scorer | [`registry.py`](src/acdan/registry.py), [`vllm_core.py`](src/acdan/backends/vllm_core.py) | mock + vLLM-backed scorer |
+| Datasets | [`datasets/`](src/acdan/datasets), [`tasks/synthetic.py`](src/acdan/tasks/synthetic.py) | synthetic + local JSONL adapters |
 
 Line-level mapping and an explicit *implemented vs. mocked* breakdown:
 [`docs/module_to_paper_mapping.md`](docs/module_to_paper_mapping.md).
@@ -165,11 +191,19 @@ correct=True  token_cost=5.00  llm_calls=5  inertia_saved=0  dead_pruned=0 ...
 token cost, LLM calls, inertia saved, dead steps pruned, mean PRM, ECE,
 dependency entropy). Exact numbers below.
 
-## Reproducible results
+## Current evidence
 
-`acdan ablation --seed 0 --n 8` (24 synthetic tasks; **deterministic across
-machines/processes** — seeds use a stable BLAKE2b hash, not Python's salted
-`hash()`):
+There are two kinds of evidence in this repo:
+
+1. **Offline mechanism checks** (`acdan ablation`) isolate each module on seeded
+   synthetic multi-step tasks.
+2. **Real-backend benchmark runs** (`python -m acdan.run_experiment`) use local
+   benchmark files plus optional vLLM / LLM-as-PRM backends.
+
+### Offline mechanism checks
+
+`acdan ablation --seed 0 --n 8` (24 synthetic tasks; deterministic across
+machines/processes because seeds use a stable BLAKE2b hash):
 
 | config | acc | sel_acc | cov | token_cost | llm_calls | inertia_saved | dead_pruned | ECE | dep_H |
 |---|---|---|---|---|---|---|---|---|---|
@@ -193,69 +227,98 @@ machines/processes** — seeds use a stable BLAKE2b hash, not Python's salted
 - **Latent + TTT** give a smaller but consistent accuracy lift (cleaner latent →
   cleaner PRM signal).
 
-> These are **synthetic-task** numbers that isolate each *mechanism*. They are not
-> benchmark SOTA and are not presented as such. For mean ± std across seeds run
-> `python examples/run_ablation.py`.
+These numbers are mechanism-isolation results, not benchmark SOTA claims.
 
-## Adding real datasets / models later
+### Real-backend BFCL run
 
-The architecture never imports a backend directly — it programs against small
-interfaces, all wired in [`src/acdan/registry.py`](src/acdan/registry.py). To go
-from demo to real experiments, implement and register:
+The current BFCL result files under `results/bfcl_qwen7b_*.json` use
+`Qwen/Qwen2.5-7B-Instruct`, the local `data/bfcl_full.jsonl` adapter, and
+LLM-as-PRM scoring. They evaluate **tool-name sequence selection**, not official
+BFCL argument / AST / executable correctness.
 
-1. **A core model** (`CoreModel.prior_logits(task, latent) -> (H, V)`): wrap your
-   LLM's action-head logits.
-2. **A PRM** (`ProcessRewardModel`, see `rewards.py`): wrap TIM-PRM / Athena-PRM.
-   Only `score_probs` + `grad_wrt_probs` are needed for DTO.
-3. **An independent verifier** (`IndependentVerifier.agreement`): a real tool /
-   sandbox evidence query.
-4. **A dataset adapter** (`DatasetAdapter.tasks()` yielding `Task` objects): load
-   GAIA / GSM8K / LiveCodeBench. Provide `prompt_features` from your encoder; set
-   `optimal_plan=None` for tasks without ground truth (metrics degrade gracefully).
+| method | accuracy | ECE | real prompt tokens/task | token surrogate | samples | verified candidates |
+|---|---:|---:|---:|---:|---:|---:|
+| ACDAN | **0.898** | **0.042** | 1587 | 1.29 | 1.00 | 3.10 |
+| RAP | 0.897 | 0.103 | 1587 | 10.46 | 8.00 | 3.10 |
+| Self-Refine | 0.892 | 0.108 | 1587 | 1.48 | 1.13 | 3.10 |
+| BoN | 0.882 | 0.118 | 1587 | 10.46 | 8.00 | 3.10 |
+| CoT / greedy | 0.803 | 0.197 | 824 | 1.31 | 1.00 | 0.00 |
 
-```python
-from acdan.registry import register_prm, register_core_model
-register_prm("tim_prm", MyTimPrmAdapter)
-register_core_model("llama3", MyLlamaAdapter)
-```
+Current BFCL ablations say:
+- **DTO is the main accuracy driver**: `no_dto` falls to CoT-level accuracy.
+- **Verification is the main calibration driver**: `no_verification` keeps
+  accuracy but worsens ECE substantially.
+- **Graph gives a small BFCL effect**.
+- **Latent reasoning, TTT, and inertia are implemented but not yet strongly
+  validated by this BFCL run**. In particular, `no_inertia` is effectively
+  identical to full ACDAN here.
 
-A complete, runnable template is in
-[`examples/custom_backend.py`](examples/custom_backend.py). **No changes to
-`agent.py`, `dto.py`, `graph.py`, `inertia.py`, or `verification.py` are
-required.**
+Cost caveat: `mean_token_surrogate` is useful for within-run accounting, but it is
+not a full end-to-end compute metric. For fair efficiency claims, report
+`mean_real_prompt_tokens`, `total_real_prompt_tokens`, `mean_latency_s`, and
+multi-seed means. In this BFCL run, ACDAN, BoN, RAP, Self-Refine, ToT, and s1 have
+similar real prompt-token costs because they share the same prior and PRM scoring
+fields.
+
+## Real datasets / models
+
+The architecture programs against small interfaces and lazy backends:
+
+1. **Core model / policy scorer**:
+   `CoreModel.prior_logits(task, latent) -> (H, V)`. The repo includes a mock
+   scorer and a vLLM-backed candidate/action scorer.
+2. **Process reward model**:
+   `ProcessRewardModel.step_reward_matrix`, `score_probs`, and
+   `grad_wrt_probs`. The repo includes a mock PRM and LLM-as-PRM.
+3. **Independent verifier / judge**:
+   optional mock or Claude-backed evidence query.
+4. **Dataset adapter**:
+   converts local JSONL benchmark files into finite-action `Task` objects.
+
+Current local adapters cover synthetic tasks, GSM8K/MATH-style answer selection,
+AIME/Omni-MATH-style candidate selection, BFCL/tool-name selection, and GAIA-like
+open-ended data. GAIA/tau2-style fully stateful execution remains an adapter and
+executor milestone; do not report those as final agentic results until execution
+and judging are wired.
+
+A complete custom-backend template is in
+[`examples/custom_backend.py`](examples/custom_backend.py).
 
 ## Repository layout
 
 ```
 ACDAN/
-├── README.md
-├── pyproject.toml / requirements.txt
-├── LICENSE / CONTRIBUTING.md / .gitignore
-├── configs/
-│   ├── default.yaml
-│   └── ablations/{baseline_cot,no_dto,no_inertia,no_graph,no_verification,no_latent}.yaml
-├── docs/
-│   ├── architecture.md
-│   ├── math.md
-│   ├── module_to_paper_mapping.md
-│   └── rebuttal_checklist.md
-├── examples/{run_demo,run_ablation,custom_backend}.py
-├── scripts/{reproduce.sh,reproduce.ps1}
-├── src/acdan/
-│   ├── agent.py            # orchestration of the full pipeline
-│   ├── config.py           # configs + AblationFlags
-│   ├── latent_reasoning.py # recurrent latent block + in-place TTT
-│   ├── dto.py              # Differentiable Textual Optimization
-│   ├── rewards.py          # PRM interface + mock PRM + Net Information Gain
-│   ├── graph.py            # two-layer ACG, vN entropy, dead-step pruning
-│   ├── inertia.py          # tool-usage inertia / inertial sensing
-│   ├── verification.py     # confidence probe, margin, independent ask, ECE
-│   ├── evaluate.py         # build + fit + run harness
-│   ├── metrics.py          # aggregation
-│   ├── registry.py         # pluggable backends (core model / PRM / datasets)
-│   ├── types.py            # dataclasses + stable seeding
-│   └── tasks/synthetic.py  # offline math/code/tool task families
-└── tests/                  # 40+ unit tests incl. finite-difference grad checks
+|-- README.md
+|-- pyproject.toml / requirements*.txt
+|-- configs/
+|   |-- default.yaml
+|   `-- ablations/
+|-- data/                   # local benchmark/candidate JSONL files
+|-- docs/
+|   |-- architecture.md
+|   |-- math.md
+|   |-- module_to_paper_mapping.md
+|   `-- rebuttal_checklist.md
+|-- experiments/
+|   |-- PLAN.md
+|   |-- gen_candidates.py
+|   `-- run_approval_matrix.sh
+|-- results/                # local experiment summaries
+|-- src/acdan/
+|   |-- agent.py            # ACDAN controller orchestration
+|   |-- run_experiment.py   # real-backend benchmark runner
+|   |-- baselines.py        # CoT, SC, BoN, ToT, RAP, Self-Refine, s1
+|   |-- dto.py              # Differentiable Textual Optimization
+|   |-- rewards.py          # PRM interface + mock PRM + NIG
+|   |-- graph.py            # two-layer ACG, vN entropy, pruning
+|   |-- inertia.py          # tool-usage inertia
+|   |-- verification.py     # confidence / independent verification / ECE
+|   |-- latent_reasoning.py # recurrent latent block + TTT
+|   |-- datasets/           # local JSONL adapters
+|   |-- backends/           # optional vLLM / encoder / Claude backends
+|   |-- training/           # PS-GRPO components
+|   `-- tasks/synthetic.py
+`-- tests/
 ```
 
 ## Rebuttal-round checklist
@@ -263,8 +326,9 @@ ACDAN/
 A full, actionable checklist for an AAAI rebuttal lives in
 [`docs/rebuttal_checklist.md`](docs/rebuttal_checklist.md). Highlights:
 
-- **Reproduce on demand:** `bash scripts/reproduce.sh` → `results/`.
-- **Every component ablated:** one config / flag each (table above).
+- **Reproduce on demand:** use `experiments/PLAN.md` and
+  `experiments/run_approval_matrix.sh` for the current real-backend matrix.
+- **Every component ablated:** one config / flag each.
 - **Math is verifiable:** DTO gradients are finite-difference-tested; vN entropy
   is exact; NIG is provably O(N).
 - **Generalisation argument:** backend-agnostic via `registry.py`
@@ -277,20 +341,22 @@ A full, actionable checklist for an AAAI rebuttal lives in
 (finite-difference-checked), exact von Neumann entropy, O(N) Net Information Gain,
 dependency-graph dead-step pruning, Markov inertial sensing, RLCM confidence probe
 (trained by BCE) + margin + ECE, in-place TTT, and the **PS-GRPO post-training
-loop** (process supervision + drop-moment + confidence margin + PPO-clip + KL,
-analytic & finite-difference-tested — `python -m acdan.train`).
+loop** (process supervision + drop-moment + confidence margin + PPO-clip + KL).
 
-**Mocked behind interfaces (offline stand-ins, pluggable):** the core LLM, the
-PRM, the independent verifier, and the datasets.
+**Implemented as optional real backends:** vLLM candidate/action scoring,
+LLM-as-PRM, sentence-transformer encoding, Claude independent verifier / judge,
+and local benchmark adapters. These are imported lazily and are not required for
+the offline core.
 
-**Deliberately out of scope for the offline demo:** loading real model/dataset
-weights and training a **real LLM** policy with PS-GRPO (the trainer optimises a
-parametric `(H,V)` policy on synthetic data; the advantage computation is
-backend-agnostic, so it is a `PolicyHead`→LLM-head swap on the VM); real
-multimodal inputs. These are documented extension points, not hidden gaps.
+**Still limited / not yet final:** current BFCL evaluation is tool-name sequence
+selection, not official BFCL executable argument correctness; GAIA/tau2-style
+stateful execution is not a final reported result; PS-GRPO currently trains an
+offline policy head rather than a real LLM/LoRA policy. The current real evidence
+supports ACDAN primarily as a test-time agentic controller, with DTO driving
+accuracy and verification driving calibration.
 
-We do **not** claim SOTA or benchmark numbers — only that the mechanisms work and
-compose as described, demonstrably and reproducibly, offline.
+We do **not** claim SOTA. Report benchmark numbers with the stated evaluator,
+real prompt-token/latency fields, and the limitations above.
 
 ## License
 

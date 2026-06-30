@@ -1,0 +1,107 @@
+\begin{thebibliography}{16}
+\providecommand{\natexlab}[1]{#1}
+
+\bibitem[{Chen, Zaharia, and Zou(2023)}]{chen2023frugalgpt}
+Chen, L.; Zaharia, M.; and Zou, J. 2023.
+\newblock {FrugalGPT}: How to Use Large Language Models While Reducing Cost and
+  Improving Performance.
+\newblock arXiv:2305.05176.
+
+\bibitem[{Cobbe et~al.(2021)Cobbe, Kosaraju, Bavarian, Chen, Jun, Kaiser,
+  Plappert, Tworek, Hilton, Nakano, Hesse, and Schulman}]{cobbe2021gsm8k}
+Cobbe, K.; Kosaraju, V.; Bavarian, M.; Chen, M.; Jun, H.; Kaiser, L.; Plappert,
+  M.; Tworek, J.; Hilton, J.; Nakano, R.; Hesse, C.; and Schulman, J. 2021.
+\newblock Training Verifiers to Solve Math Word Problems.
+\newblock arXiv:2110.14168.
+
+\bibitem[{{Gorilla Team}(2024)}]{bfcl2024}
+{Gorilla Team}. 2024.
+\newblock Berkeley Function Calling Leaderboard.
+\newblock \url{https://gorilla.cs.berkeley.edu/leaderboard.html}.
+\newblock Accessed 2026-06-28; verify citation metadata before submission.
+
+\bibitem[{Hendrycks et~al.(2021)Hendrycks, Burns, Kadavath, Arora, Basart,
+  Tang, Song, and Steinhardt}]{hendrycks2021math}
+Hendrycks, D.; Burns, C.; Kadavath, S.; Arora, A.; Basart, S.; Tang, E.; Song,
+  D.; and Steinhardt, J. 2021.
+\newblock Measuring Mathematical Problem Solving With the {MATH} Dataset.
+\newblock arXiv:2103.03874.
+
+\bibitem[{Kang et~al.(2025)}]{kang2025selfcertainty}
+Kang, M.; et~al. 2025.
+\newblock Scalable Best-of-{N} Selection for Large Language Models via
+  Self-Certainty.
+\newblock Verify full author list before submission, arXiv:2502.18581.
+
+\bibitem[{Kim et~al.(2026)Kim, Yang, Min, and Jung}]{kim2026reasc}
+Kim, J.; Yang, N.; Min, K.; and Jung, K. 2026.
+\newblock Reliability-Aware Adaptive Self-Consistency for Efficient Sampling in
+  {LLM} Reasoning.
+\newblock arXiv:2601.02970.
+
+\bibitem[{Li et~al.(2024)}]{li2024esc}
+Li, Y.; et~al. 2024.
+\newblock Escape Sky-high Cost: Early-stopping Self-Consistency for Multi-step
+  Reasoning.
+\newblock Verify full author list before submission, arXiv:2401.10480.
+
+\bibitem[{Lightman et~al.(2023)Lightman, Kosaraju, Burda, Edwards, Baker, Lee,
+  Leike, Schulman, Sutskever, and Cobbe}]{lightman2023verify}
+Lightman, H.; Kosaraju, V.; Burda, Y.; Edwards, H.; Baker, B.; Lee, T.; Leike,
+  J.; Schulman, J.; Sutskever, I.; and Cobbe, K. 2023.
+\newblock Let's Verify Step by Step.
+\newblock arXiv:2305.20050.
+
+\bibitem[{Lu et~al.(2024)Lu, Yuan, Lin, Lin, Yuan, Zhou, and
+  Zhou}]{lu2024zooter}
+Lu, K.; Yuan, H.; Lin, R.; Lin, J.; Yuan, Z.; Zhou, C.; and Zhou, J. 2024.
+\newblock Routing to the Expert: Efficient Reward-guided Ensemble of Large
+  Language Models.
+\newblock In \emph{Proceedings of NAACL}.
+
+\bibitem[{{Omni-MATH Authors}(2024)}]{omnimath2024}
+{Omni-MATH Authors}. 2024.
+\newblock {Omni-MATH}: A Universal Olympiad Level Mathematic Benchmark For
+  Large Language Models.
+\newblock Verify full author list before submission, arXiv:2410.07985.
+
+\bibitem[{Ong et~al.(2024)Ong, Almahairi, Wu, Chiang, Wu, Gonzalez, Kadous, and
+  Stoica}]{ong2024routellm}
+Ong, I.; Almahairi, A.; Wu, V.; Chiang, W.-L.; Wu, T.; Gonzalez, J.~E.; Kadous,
+  M.~W.; and Stoica, I. 2024.
+\newblock {RouteLLM}: Learning to Route {LLM}s with Preference Data.
+\newblock arXiv:2406.18665.
+
+\bibitem[{Wan et~al.(2025)}]{wan2025rasc}
+Wan, Z.; et~al. 2025.
+\newblock Leveraging Reasoning Paths for Efficient {LLM} Sampling.
+\newblock In \emph{Proceedings of NAACL}.
+\newblock Reasoning-Aware Self-Consistency; verify full author list before
+  submission.
+
+\bibitem[{Wang et~al.(2023)}]{wang2023mathshepherd}
+Wang, P.; et~al. 2023.
+\newblock Math-Shepherd: Verify and Reinforce {LLM}s Step-by-step without Human
+  Annotations.
+\newblock Verify full author list before submission, arXiv:2312.08935.
+
+\bibitem[{Wang et~al.(2022)Wang, Wei, Schuurmans, Le, Chi, Narang, Chowdhery,
+  and Zhou}]{wang2022selfconsistency}
+Wang, X.; Wei, J.; Schuurmans, D.; Le, Q.; Chi, E.; Narang, S.; Chowdhery, A.;
+  and Zhou, D. 2022.
+\newblock Self-Consistency Improves Chain of Thought Reasoning in Language
+  Models.
+\newblock arXiv:2203.11171.
+
+\bibitem[{Wang et~al.(2024)}]{wang2024dsc}
+Wang, X.; et~al. 2024.
+\newblock Make Every Penny Count: Difficulty-Adaptive Self-Consistency for
+  Cost-Efficient Reasoning.
+\newblock Verify full author list before submission, arXiv:2408.13457.
+
+\bibitem[{Zhang et~al.(2024)}]{zhang2024genrm}
+Zhang, L.; et~al. 2024.
+\newblock Generative Verifiers: Reward Modeling as Next-Token Prediction.
+\newblock Verify full author list before submission, arXiv:2408.15240.
+
+\end{thebibliography}

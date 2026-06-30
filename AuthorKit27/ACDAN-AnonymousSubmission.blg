@@ -1,0 +1,48 @@
+This is BibTeX, Version 0.99e
+Capacity: max_strings=200000, hash_size=200000, hash_prime=170003
+The top-level auxiliary file: ACDAN-AnonymousSubmission.aux
+Reallocating 'name_of_file' (item size: 1) to 9 items.
+The style file: aaai2027.bst
+Reallocating 'name_of_file' (item size: 1) to 6 items.
+Database file #1: acdan.bib
+You've used 16 entries,
+            2840 wiz_defined-function locations,
+            656 strings with 7479 characters,
+and the built_in function-call counts, 9910 in all, are:
+= -- 757
+> -- 725
+< -- 0
++ -- 269
+- -- 254
+* -- 745
+:= -- 1805
+add.period$ -- 66
+call.type$ -- 16
+change.case$ -- 150
+chr.to.int$ -- 17
+cite$ -- 16
+duplicate$ -- 606
+empty$ -- 499
+format.name$ -- 295
+if$ -- 1800
+int.to.chr$ -- 1
+int.to.str$ -- 1
+missing$ -- 136
+newline$ -- 86
+num.names$ -- 64
+pop$ -- 312
+preamble$ -- 1
+purify$ -- 138
+quote$ -- 0
+skip$ -- 261
+stack$ -- 0
+substring$ -- 192
+swap$ -- 285
+text.length$ -- 0
+text.prefix$ -- 0
+top$ -- 0
+type$ -- 144
+warning$ -- 0
+while$ -- 64
+width$ -- 0
+write$ -- 205
