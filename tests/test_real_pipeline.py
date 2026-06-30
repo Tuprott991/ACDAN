@@ -197,6 +197,45 @@ def test_hf_encoder_defaults_to_cpu_with_vllm_policy(monkeypatch):
     assert captured["kwargs"]["device"] == "cpu"
 
 
+def test_vllm_hidden_encoder_uses_shared_core(monkeypatch):
+    captured = {}
+
+    class DummyCore:
+        hidden_size = 5
+
+        def prompt_hidden_features(self, text, pooling="last", normalize=True):
+            return np.ones(self.hidden_size)
+
+    def fake_build_encoder(kind, **kwargs):
+        captured["kind"] = kind
+        captured["kwargs"] = kwargs
+
+        class DummyEncoder:
+            dim = kwargs["core"].hidden_size
+
+            def encode(self, text):
+                return kwargs["core"].prompt_hidden_features(text, pooling=kwargs["pooling"])
+
+        return DummyEncoder()
+
+    import acdan.backends.encoder as encoder_mod
+
+    monkeypatch.setattr(encoder_mod, "build_encoder", fake_build_encoder)
+    args = build_parser().parse_args([
+        "--policy", "vllm",
+        "--policy-model", "Qwen/Qwen2.5-7B-Instruct",
+        "--encoder", "vllm_hidden",
+        "--encoder-pooling", "mean",
+    ])
+
+    enc = _build_encoder(args, DummyCore())
+
+    assert enc.dim == 5
+    assert captured["kind"] == "vllm_hidden"
+    assert captured["kwargs"]["pooling"] == "mean"
+    assert isinstance(captured["kwargs"]["core"], DummyCore)
+
+
 def test_runner_end_to_end_mock(tmp_path):
     out = tmp_path / "r.json"
     args = build_parser().parse_args(

@@ -68,6 +68,9 @@ def _build_core(name: str, model: Optional[str], args: argparse.Namespace):
             dtype=args.vllm_dtype,
             gpu_memory_utilization=args.vllm_gpu_memory_utilization,
             seed=args.seed,
+            extract_hidden_states=args.encoder == "vllm_hidden",
+            hidden_state_layer_ids=args.vllm_hidden_state_layer_ids,
+            hidden_state_storage_path=args.vllm_hidden_state_storage_path,
         )
     raise KeyError(f"unknown policy '{name}'")
 
@@ -84,7 +87,7 @@ def _build_prm(name: str, model: Optional[str], core, seed: int):
     raise KeyError(f"unknown prm '{name}'")
 
 
-def _build_encoder(args: argparse.Namespace):
+def _build_encoder(args: argparse.Namespace, core=None):
     from acdan.backends.encoder import build_encoder
     if args.encoder == "hash":
         return build_encoder("hash")
@@ -109,6 +112,14 @@ def _build_encoder(args: argparse.Namespace):
             device=device,
             max_length=args.encoder_max_length,
             trust_remote_code=args.trust_remote_code,
+        )
+    if args.encoder == "vllm_hidden":
+        if core is None or not hasattr(core, "prompt_hidden_features"):
+            raise ValueError("--encoder vllm_hidden requires --policy vllm")
+        return build_encoder(
+            "vllm_hidden",
+            core=core,
+            pooling=args.encoder_pooling,
         )
     raise KeyError(f"unknown encoder '{args.encoder}'")
 
@@ -219,8 +230,8 @@ def run(args: argparse.Namespace) -> dict:
     core = _build_core(args.policy, args.policy_model, args)
     _monitor(args, f"loaded core in {time.perf_counter() - t_stage:.1f}s")
 
-    encoder_model = args.encoder_model or (args.policy_model if args.encoder == "hf" else None)
-    encoder_device = args.encoder_device or ("cpu" if args.encoder == "hf" and args.policy == "vllm" else "auto")
+    encoder_model = args.encoder_model or (args.policy_model if args.encoder in {"hf", "vllm_hidden"} else None)
+    encoder_device = args.encoder_device or ("cpu" if args.encoder == "hf" and args.policy == "vllm" else "shared-vllm" if args.encoder == "vllm_hidden" else "auto")
     _monitor(
         args,
         (
@@ -229,7 +240,7 @@ def run(args: argparse.Namespace) -> dict:
         ),
     )
     t_stage = time.perf_counter()
-    encoder = _build_encoder(args)
+    encoder = _build_encoder(args, core)
     _monitor(args, f"loaded encoder dim={encoder.dim} in {time.perf_counter() - t_stage:.1f}s")
 
     _monitor(args, f"loading prm={args.prm} model={args.prm_model or 'shared/mock'}")
@@ -510,9 +521,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--vllm-max-model-len", type=int, default=4096)
     p.add_argument("--vllm-dtype", default="bfloat16")
     p.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.90)
+    p.add_argument(
+        "--vllm-hidden-state-layer-ids",
+        type=int,
+        nargs="*",
+        default=None,
+        help=(
+            "Layer ids for vLLM hidden-state extraction. Defaults to the final "
+            "layer inferred from model config."
+        ),
+    )
+    p.add_argument(
+        "--vllm-hidden-state-storage-path",
+        default=None,
+        help="Shared storage path for vLLM hidden-state safetensors.",
+    )
     p.add_argument("--prm", default="mock", choices=["mock", "llm"])
     p.add_argument("--prm-model", default=None, help="HF id for a dedicated PRM.")
-    p.add_argument("--encoder", default="hash", choices=["hash", "st", "hf"])
+    p.add_argument("--encoder", default="hash", choices=["hash", "st", "hf", "vllm_hidden"])
     p.add_argument(
         "--encoder-model",
         default=None,

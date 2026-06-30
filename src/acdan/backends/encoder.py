@@ -155,12 +155,41 @@ class HFLLMHiddenStateEncoder:
         return vec
 
 
+class VLLMSharedHiddenStateEncoder:
+    """Prompt encoder that reuses an existing vLLM core/model instance."""
+
+    def __init__(
+        self,
+        core,
+        pooling: str = "last",
+        normalize: bool = True,
+    ):
+        if not hasattr(core, "prompt_hidden_features"):
+            raise TypeError("core does not expose prompt_hidden_features")
+        if pooling not in {"last", "mean"}:
+            raise ValueError("pooling must be 'last' or 'mean'")
+        self.core = core
+        self.pooling = pooling
+        self.normalize = bool(normalize)
+        self.dim = int(getattr(core, "hidden_size", 4096))
+
+    def encode(self, text: str) -> np.ndarray:
+        vec = self.core.prompt_hidden_features(
+            text or "",
+            pooling=self.pooling,
+            normalize=self.normalize,
+        )
+        return vec
+
+
 def build_encoder(kind: str = "hash", **kwargs):
-    """Factory: ``hash`` (offline), ``st`` or ``hf`` LLM hidden-state features."""
+    """Factory for prompt feature encoders."""
     if kind == "hash":
         return HashingEncoder(**kwargs)
     if kind == "st":
         return SentenceTransformerEncoder(**kwargs)
     if kind == "hf":
         return HFLLMHiddenStateEncoder(**kwargs)
-    raise KeyError(f"unknown encoder '{kind}' (use 'hash' or 'st')")
+    if kind == "vllm_hidden":
+        return VLLMSharedHiddenStateEncoder(**kwargs)
+    raise KeyError(f"unknown encoder '{kind}' (use 'hash', 'st', 'hf', or 'vllm_hidden')")

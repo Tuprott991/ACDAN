@@ -98,21 +98,19 @@ generation, wrap the LLM output into candidates first (for example answer
 selection, tool selection, workflow-step selection, or reranking).
 
 The default feature encoder is a dependency-free hash encoder for offline smoke
-tests. For real latent/TTT claims, use `--encoder hf` to extract prompt features
-from a causal LLM's pooled input embeddings or final hidden state before the LM
-head:
+tests. For real vLLM runs, use `--encoder vllm_hidden` to extract pooled prompt
+hidden states from the same vLLM engine used for action scoring:
 
 ```bash
 python -m acdan.run_experiment --method acdan --dataset bfcl \
   --data-path data/bfcl_full.jsonl \
   --policy vllm --policy-model Qwen/Qwen2.5-7B-Instruct --prm llm \
-  --encoder hf --encoder-mode last_hidden --encoder-pooling last \
-  --encoder-dtype bfloat16 --encoder-device cpu
+  --encoder vllm_hidden --encoder-pooling last
 ```
 
-This grounds ACDAN's latent state in the policy-model family, but it remains
-controller-side feature extraction. It does not update the base LLM hidden
-states or weights during decoding.
+This grounds ACDAN's latent state in the policy model's own vLLM forward path,
+but it remains controller-side feature extraction. It does not update the base
+LLM hidden states or weights during decoding.
 
 Closest comparison families for the paper are **Best-of-N + verifier/PRM**,
 **MCTS/RAP-style planning**, **Tree of Thoughts**, **Self-Refine**, **s1/budget
