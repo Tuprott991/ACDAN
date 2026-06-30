@@ -78,9 +78,30 @@ def _build_prm(name: str, model: Optional[str], core, seed: int):
     raise KeyError(f"unknown prm '{name}'")
 
 
-def _build_encoder(name: str):
+def _build_encoder(args: argparse.Namespace):
     from acdan.backends.encoder import build_encoder
-    return build_encoder("hash" if name == "hash" else "st")
+    if args.encoder == "hash":
+        return build_encoder("hash")
+    if args.encoder == "st":
+        kwargs = {}
+        if args.encoder_model:
+            kwargs["model_name"] = args.encoder_model
+        return build_encoder("st", **kwargs)
+    if args.encoder == "hf":
+        model_name = args.encoder_model or args.policy_model
+        if not model_name:
+            raise ValueError("--encoder hf requires --encoder-model or --policy-model")
+        return build_encoder(
+            "hf",
+            model_name=model_name,
+            mode=args.encoder_mode,
+            pooling=args.encoder_pooling,
+            dtype=args.encoder_dtype,
+            device=args.encoder_device,
+            max_length=args.encoder_max_length,
+            trust_remote_code=args.trust_remote_code,
+        )
+    raise KeyError(f"unknown encoder '{args.encoder}'")
 
 
 def _to_task(raw: RawTask, features: np.ndarray) -> Task:
@@ -157,7 +178,7 @@ def run(args: argparse.Namespace) -> dict:
             flags[field] = False
         config = dataclasses.replace(config, ablation=AblationFlags(**flags))
 
-    encoder = _build_encoder(args.encoder)
+    encoder = _build_encoder(args)
     core = _build_core(args.policy, args.policy_model, args.seed)
     prm = _build_prm(args.prm, args.prm_model, core, args.seed)
     reasoner = LatentReasoner(config.latent, feature_dim=encoder.dim, seed=args.seed)
@@ -378,7 +399,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--policy-model", default=None, help="HF id for vLLM policy.")
     p.add_argument("--prm", default="mock", choices=["mock", "llm"])
     p.add_argument("--prm-model", default=None, help="HF id for a dedicated PRM.")
-    p.add_argument("--encoder", default="hash", choices=["hash", "st"])
+    p.add_argument("--encoder", default="hash", choices=["hash", "st", "hf"])
+    p.add_argument(
+        "--encoder-model",
+        default=None,
+        help=(
+            "Feature encoder model. For --encoder hf, defaults to --policy-model. "
+            "For --encoder st, defaults to the encoder backend default."
+        ),
+    )
+    p.add_argument("--encoder-mode", default="last_hidden", choices=["last_hidden", "input_emb"])
+    p.add_argument("--encoder-pooling", default="last", choices=["last", "mean"])
+    p.add_argument("--encoder-dtype", default="auto", choices=["auto", "float16", "bfloat16", "float32"])
+    p.add_argument("--encoder-device", default=None, help="Override encoder device, e.g. cuda:0 or cpu.")
+    p.add_argument("--encoder-max-length", type=int, default=2048)
+    p.add_argument("--trust-remote-code", action="store_true")
     p.add_argument("--verifier", default="none", choices=["none", "claude"])
     p.add_argument("--judge-model", default="claude-opus-4-8")
     p.add_argument("--n", type=int, default=8, help="N for sc/bon.")

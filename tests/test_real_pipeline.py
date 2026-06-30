@@ -23,7 +23,7 @@ from acdan.datasets.base import (
 )
 from acdan.latent_reasoning import LatentReasoner
 from acdan.registry import build_core_model, build_prm
-from acdan.run_experiment import _to_task, build_parser, run
+from acdan.run_experiment import _build_encoder, _to_task, build_parser, run
 from acdan.verification import SelfVerifier
 
 
@@ -134,6 +134,40 @@ def test_build_dataset_synthetic_and_checker():
     ds = build_dataset("synthetic", limit=5)
     assert len(list(ds.tasks())) == 5
     assert build_outcome_checker("synthetic") is outcome_exact
+
+
+def test_hf_encoder_defaults_to_policy_model(monkeypatch):
+    captured = {}
+
+    class DummyEncoder:
+        dim = 7
+
+    def fake_build_encoder(kind, **kwargs):
+        captured["kind"] = kind
+        captured["kwargs"] = kwargs
+        return DummyEncoder()
+
+    import acdan.backends.encoder as encoder_mod
+
+    monkeypatch.setattr(encoder_mod, "build_encoder", fake_build_encoder)
+    args = build_parser().parse_args([
+        "--encoder", "hf",
+        "--policy-model", "Qwen/Qwen2.5-7B-Instruct",
+        "--encoder-mode", "input_emb",
+        "--encoder-pooling", "mean",
+        "--encoder-dtype", "float16",
+        "--encoder-max-length", "512",
+    ])
+
+    enc = _build_encoder(args)
+
+    assert enc.dim == 7
+    assert captured["kind"] == "hf"
+    assert captured["kwargs"]["model_name"] == "Qwen/Qwen2.5-7B-Instruct"
+    assert captured["kwargs"]["mode"] == "input_emb"
+    assert captured["kwargs"]["pooling"] == "mean"
+    assert captured["kwargs"]["dtype"] == "float16"
+    assert captured["kwargs"]["max_length"] == 512
 
 
 def test_runner_end_to_end_mock(tmp_path):

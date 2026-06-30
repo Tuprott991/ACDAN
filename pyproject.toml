@@ -43,7 +43,7 @@ gpu = [
 ]
 # Optional: Claude API roles (independent verifier / judge).
 api = [
-    "anthropic>=0.40",
+    "anthropic>=0.40", 
 ]
 
 [project.scripts]

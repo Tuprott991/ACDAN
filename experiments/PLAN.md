@@ -6,7 +6,11 @@ an `(H, V)` prior, DTO refines that prior, and a PRM supplies reward gradients.
 Math runs are `H=1, V=K` answer selection over pre-generated candidates; graph
 and inertia should be evaluated on multi-step tool/agent tasks, not sold as math
 accuracy modules. Latent reasoning gates the LLM-PRM target sharpness through
-`quality(latent)`; it is not hidden-state TTT of the base LLM.
+`quality(latent)`. The default `--encoder hash` is only an offline smoke-test
+feature encoder. For real claims, prefer `--encoder hf`, which extracts prompt
+features from a causal LLM's pooled input embeddings or final hidden state before
+the LM head. This is still controller-side feature extraction; it does not
+perform hidden-state TTT inside the base LLM weights.
 
 ---
 
@@ -40,6 +44,22 @@ Measure real throughput before full runs:
 Use `summary.mean_latency_s` from this smoke run to rescale estimates:
 `benchmark_eval_seconds ~= model_load + N_tasks * mean_latency_s`.
 
+Optional real latent encoder smoke test:
+
+```bash
+.venv/bin/python -m acdan.run_experiment --method acdan --dataset bfcl \
+  --data-path data/bfcl_full.jsonl --limit 25 \
+  --policy vllm --policy-model Qwen/Qwen2.5-7B-Instruct --prm llm \
+  --encoder hf --encoder-mode last_hidden --encoder-pooling last \
+  --encoder-dtype bfloat16 --encoder-max-length 2048 \
+  --out results/_smoke_bfcl_hfencoder.json
+```
+
+Memory caveat: with `--policy vllm --encoder hf`, the model may be loaded once
+by vLLM for action scoring and once by Transformers for hidden-state features.
+Use a smaller encoder model, `--encoder-mode input_emb`, CPU offload, or a
+separate VM if the policy model already fills the GPU.
+
 ---
 
 ## 1. Dataset Setup
@@ -48,6 +68,22 @@ The setup script prepares stable local files and raw snapshots:
 
 ```bash
 .venv/bin/python scripts/setup_datasets.py --suite all --overwrite
+```
+
+Roadmap stateful benchmarks are prepared separately so the normal math/BFCL
+workflow stays fast and stable:
+
+```bash
+# Inspect sources and manifest shape without downloading anything.
+.venv/bin/python scripts/setup_datasets.py --suite agentic_benchmarks --dry-run \
+  --out-dir data/roadmap_dryrun
+
+# Download all raw roadmap benchmark sources into data/raw/agentic_benchmarks/.
+.venv/bin/python scripts/setup_datasets.py --suite agentic_benchmarks --overwrite
+
+# Or download a targeted subset.
+.venv/bin/python scripts/setup_datasets.py --suite agentic_benchmarks \
+  --benchmarks webvoyager,swe_bench_verified,tau2_bench_data,tau2_bench_hud
 ```
 
 Fast sanity checks before candidate generation:
@@ -136,8 +172,11 @@ self-consistency baseline: it stops once the plurality answer reaches a
 confidence threshold, giving ACDAN a direct adaptive-compute competitor.
 
 Secondary search/refinement baselines now available in the same runner:
-`tot`, `rap`, `refine`, `s1`. Include them in the appendix matrix or targeted
-BFCL/math robustness table after the primary Pareto gates pass.
+`tot`, `rap`, `refine`, `s1`. Here `rap` is the MCTS-style baseline. Include
+them in the appendix matrix or targeted BFCL/math robustness table after the
+primary Pareto gates pass. Process Reward Agents should be cited as a recent
+PRM-guided agent comparison family, but this repo does not yet implement a
+dedicated PRA executor baseline.
 
 ### 3a. Math
 
@@ -259,8 +298,32 @@ Calibration study:
 ### 3c. Stateful Agentic Raw Data
 
 `data/raw/tau2_bench_data/` and `data/raw/tau2_bench_hud/` are available for the
-next adapter/executor milestone. Do not report tau2/GAIA as final ACDAN numbers
-until the runner produces final answers through an execution layer.
+next adapter/executor milestone. They are raw snapshots only: `build_dataset`
+currently has no `tau`, `tau2`, or `taubench` adapter, and the runner has no
+tau-bench stateful executor/judge. Do not report tau2/GAIA as final ACDAN
+numbers until the runner produces final answers through an execution layer.
+
+Recommended stateful benchmark roadmap:
+
+| Domain | Dataset | Original size | Setup key | Raw source | Current repo status |
+|---|---|---:|---|---|---|
+| Search | BrowseComp | 1266 | `browsecomp` | `smolagents/browse_comp` | raw snapshot only |
+| Search | WebVoyager | 643 | `webvoyager` | `agentorg/webvoyager` | raw snapshot only |
+| Coding | SWE-Bench Verified | 500 | `swe_bench_verified` | `SWE-bench/SWE-bench_Verified` | raw snapshot only |
+| Coding | Terminal-Bench | 230 | `terminal_bench` | `laude-institute/terminal-bench-datasets` | raw archive only |
+| Reason | MathHay | 602 | `mathhay` | `cxcscmu/General-AgentBench` | raw archive only |
+| Tool-Calling | Tau2-Bench | 278 | `tau2_bench_data`, `tau2_bench_hud` | `HuggingFaceH4/tau2-bench-data`, `Genteki/tau2-bench` | raw snapshot only |
+| Tool-Calling | MCP-Bench | 104 | `mcp_bench` | `Accenture/mcp-bench` | raw archive only |
+
+Raw setup success does not mean ACDAN can report those benchmark numbers. Before
+reporting a stateful benchmark, add:
+
+1. A dataset adapter that converts the raw task format into candidate actions or
+   an agent state.
+2. An executor for browser, terminal, repository, tau2, or MCP state transitions.
+3. A reproducible judge using the official evaluator when one exists.
+4. Budget-matched baselines: CoT/greedy, BoN+PRM, RAP/MCTS, ToT/Self-Refine/s1,
+   plus Process Reward Agents if implementing a direct PRM-guided agent baseline.
 
 ---
 

@@ -11,13 +11,37 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import sys
+import tempfile
+import urllib.error
+import urllib.request
+import zipfile
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Literal
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 from acdan.datasets.math_answer import extract_final_answer
 
 
-ROOT = Path(__file__).resolve().parents[1]
+SourceKind = Literal["hf_dataset", "github_zip", "manual"]
+
+
+@dataclass(frozen=True)
+class AgenticBenchmarkSpec:
+    key: str
+    domain: str
+    dataset: str
+    original_size: int
+    source_kind: SourceKind
+    source: str
+    status: str
+    notes: str
 
 
 def load_env(path: str | Path = ROOT / ".env") -> dict[str, str]:
@@ -63,6 +87,198 @@ def _write_jsonl(path: Path, rows: Iterable[dict[str, Any]], overwrite: bool) ->
             n += 1
     print(f"wrote {n} rows -> {path}")
     return n
+
+
+def _safe_name(name: str) -> str:
+    return "".join(ch.lower() if ch.isalnum() else "_" for ch in name).strip("_")
+
+
+def _agentic_benchmark_specs() -> tuple[AgenticBenchmarkSpec, ...]:
+    """Raw-source registry for stateful agentic benchmarks.
+
+    These sources prepare raw benchmark material only. They do not make the
+    benchmarks runnable in ACDAN; each still needs a dataset adapter, execution
+    layer, and official/reproducible judge.
+    """
+
+    return (
+        AgenticBenchmarkSpec(
+            key="browsecomp",
+            domain="Search",
+            dataset="BrowseComp",
+            original_size=1266,
+            source_kind="hf_dataset",
+            source="smolagents/browse_comp",
+            status="raw_hf_snapshot",
+            notes="Search QA benchmark; requires web/search-capable executor before ACDAN evaluation.",
+        ),
+        AgenticBenchmarkSpec(
+            key="webvoyager",
+            domain="Search",
+            dataset="WebVoyager",
+            original_size=643,
+            source_kind="hf_dataset",
+            source="agentorg/webvoyager",
+            status="raw_hf_snapshot",
+            notes="Web navigation tasks; requires browser executor and trajectory judge.",
+        ),
+        AgenticBenchmarkSpec(
+            key="swe_bench_verified",
+            domain="Coding",
+            dataset="SWE-Bench Verified",
+            original_size=500,
+            source_kind="hf_dataset",
+            source="SWE-bench/SWE-bench_Verified",
+            status="raw_hf_snapshot",
+            notes="Patch-generation benchmark; requires SWE-bench harness, checkout cache, and tests.",
+        ),
+        AgenticBenchmarkSpec(
+            key="terminal_bench",
+            domain="Coding",
+            dataset="Terminal-Bench",
+            original_size=230,
+            source_kind="github_zip",
+            source="laude-institute/terminal-bench-datasets",
+            status="raw_github_archive",
+            notes="Containerized terminal tasks; requires Terminal-Bench/Harbor executor.",
+        ),
+        AgenticBenchmarkSpec(
+            key="mathhay",
+            domain="Reason",
+            dataset="MathHay",
+            original_size=602,
+            source_kind="github_zip",
+            source="cxcscmu/General-AgentBench",
+            status="raw_general_agentbench_archive",
+            notes="General-AgentBench reasoning subset; extract the MathHay split before adapter work.",
+        ),
+        AgenticBenchmarkSpec(
+            key="tau2_bench_data",
+            domain="Tool-Calling",
+            dataset="Tau2-Bench data",
+            original_size=278,
+            source_kind="hf_dataset",
+            source="HuggingFaceH4/tau2-bench-data",
+            status="raw_hf_snapshot",
+            notes="Stateful tau2 source material; requires simulator/executor and final-answer judge.",
+        ),
+        AgenticBenchmarkSpec(
+            key="tau2_bench_hud",
+            domain="Tool-Calling",
+            dataset="Tau2-Bench HUD",
+            original_size=278,
+            source_kind="hf_dataset",
+            source="Genteki/tau2-bench",
+            status="raw_hf_snapshot",
+            notes="HUD-format tau2 tasks; paired with tau2 data when building the adapter.",
+        ),
+        AgenticBenchmarkSpec(
+            key="mcp_bench",
+            domain="Tool-Calling",
+            dataset="MCP-Bench",
+            original_size=104,
+            source_kind="github_zip",
+            source="Accenture/mcp-bench",
+            status="raw_github_archive",
+            notes="MCP server benchmark; requires MCP servers/tools and trajectory/task-completion judge.",
+        ),
+    )
+
+
+def _download_github_archive(repo: str, dest: Path, overwrite: bool) -> str:
+    """Download a GitHub repository zip archive without shelling out to git."""
+
+    if dest.exists() and not overwrite:
+        print(f"skip existing {dest}")
+        return str(dest)
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    owner_repo = repo.strip("/")
+    errors: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="acdan_github_") as tmp:
+        archive = Path(tmp) / "repo.zip"
+        for branch in ("main", "master"):
+            url = f"https://github.com/{owner_repo}/archive/refs/heads/{branch}.zip"
+            try:
+                urllib.request.urlretrieve(url, archive)
+                with zipfile.ZipFile(archive) as zf:
+                    members = zf.namelist()
+                    if not members:
+                        raise RuntimeError(f"empty GitHub archive: {url}")
+                    prefix = members[0].split("/", 1)[0]
+                    zf.extractall(tmp)
+                extracted = Path(tmp) / prefix
+                shutil.move(str(extracted), str(dest))
+                print(f"archive -> {dest}")
+                return str(dest)
+            except (urllib.error.URLError, zipfile.BadZipFile, RuntimeError) as exc:
+                errors.append(f"{branch}: {exc}")
+                if archive.exists():
+                    archive.unlink()
+    raise RuntimeError(f"could not download GitHub repo {repo}: {'; '.join(errors)}")
+
+
+def prepare_agentic_benchmarks(
+    out_dir: Path,
+    overwrite: bool,
+    token: str | None,
+    dry_run: bool = False,
+    selected: set[str] | None = None,
+    fail_fast: bool = False,
+) -> dict[str, Any]:
+    """Prepare raw files for roadmap agentic benchmarks.
+
+    The returned manifest records exactly what was attempted and whether it is
+    runnable in ACDAN. Today these are raw snapshots/archives only.
+    """
+
+    specs = _agentic_benchmark_specs()
+    selected = selected or {spec.key for spec in specs}
+    unknown = sorted(selected - {spec.key for spec in specs})
+    if unknown:
+        raise ValueError(f"unknown agentic benchmark(s): {', '.join(unknown)}")
+
+    raw = out_dir / "raw" / "agentic_benchmarks"
+    results: dict[str, Any] = {}
+    for spec in specs:
+        if spec.key not in selected:
+            continue
+        entry = asdict(spec)
+        entry["acdan_runnable"] = False
+        entry["path"] = str(raw / spec.key)
+        if dry_run:
+            entry["prepared"] = False
+            entry["dry_run"] = True
+            results[spec.key] = entry
+            print(f"dry-run {spec.key}: {spec.source_kind} {spec.source}")
+            continue
+        try:
+            if spec.source_kind == "hf_dataset":
+                from huggingface_hub import snapshot_download
+
+                path = snapshot_download(
+                    spec.source,
+                    repo_type="dataset",
+                    local_dir=raw / spec.key,
+                    token=token,
+                )
+                entry["path"] = str(Path(path))
+            elif spec.source_kind == "github_zip":
+                entry["path"] = _download_github_archive(spec.source, raw / spec.key, overwrite)
+            else:
+                entry["manual"] = True
+            entry["prepared"] = True
+            print(f"prepared {spec.key} -> {entry['path']}")
+        except Exception as exc:  # pragma: no cover - depends on remote services.
+            entry["prepared"] = False
+            entry["error"] = f"{type(exc).__name__}: {exc}"
+            print(f"warning: failed {spec.key}: {entry['error']}")
+            if fail_fast:
+                raise
+        results[spec.key] = entry
+    return results
 
 
 def _gsm_answer(answer: str) -> str:
@@ -277,25 +493,41 @@ def prepare_bfcl(out_dir: Path, overwrite: bool, token: str | None) -> dict[str,
 
 
 def snapshot_agentic_raw(out_dir: Path, token: str | None) -> dict[str, str]:
-    from huggingface_hub import snapshot_download
-
-    raw = out_dir / "raw"
-    paths = {}
-    for name, repo in {
-        "tau2_bench_data": "HuggingFaceH4/tau2-bench-data",
-        "tau2_bench_hud": "Genteki/tau2-bench",
-    }.items():
-        dest = raw / name
-        snapshot_download(repo, repo_type="dataset", local_dir=dest, token=token)
-        paths[name] = str(dest)
-        print(f"snapshot -> {dest}")
-    return paths
+    prepared = prepare_agentic_benchmarks(
+        out_dir,
+        overwrite=False,
+        token=token,
+        selected={"tau2_bench_data", "tau2_bench_hud"},
+    )
+    return {name: str(entry["path"]) for name, entry in prepared.items()}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Prepare ACDAN benchmark datasets.")
     parser.add_argument("--out-dir", default=str(ROOT / "data"))
-    parser.add_argument("--suite", choices=["math", "bfcl", "agentic_raw", "all"], default="all")
+    parser.add_argument(
+        "--suite",
+        choices=["math", "bfcl", "agentic_raw", "agentic_benchmarks", "all"],
+        default="all",
+    )
+    parser.add_argument(
+        "--benchmarks",
+        default="all",
+        help=(
+            "Comma-separated agentic benchmark keys for --suite agentic_benchmarks. "
+            "Use 'all' for every roadmap benchmark."
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Write a manifest of planned downloads without downloading files.",
+    )
+    parser.add_argument(
+        "--fail-fast",
+        action="store_true",
+        help="Stop on the first failed remote download instead of recording the error.",
+    )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--env-file", default=str(ROOT / ".env"))
     args = parser.parse_args()
@@ -303,6 +535,7 @@ def main() -> int:
     load_env(args.env_file)
     token = os.environ.get("HF_TOKEN")
     out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
     manifest: dict[str, Any] = {"out_dir": str(out_dir), "suite": args.suite}
 
     if args.suite in {"math", "all"}:
@@ -311,6 +544,22 @@ def main() -> int:
         manifest["bfcl"] = prepare_bfcl(out_dir, args.overwrite, token)
     if args.suite in {"agentic_raw", "all"}:
         manifest["agentic_raw"] = snapshot_agentic_raw(out_dir, token)
+    if args.suite == "agentic_benchmarks":
+        selected = None
+        if args.benchmarks.strip().lower() != "all":
+            selected = {
+                item.strip()
+                for item in args.benchmarks.split(",")
+                if item.strip()
+            }
+        manifest["agentic_benchmarks"] = prepare_agentic_benchmarks(
+            out_dir,
+            args.overwrite,
+            token,
+            dry_run=args.dry_run,
+            selected=selected,
+            fail_fast=args.fail_fast,
+        )
 
     manifest_path = out_dir / "dataset_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")

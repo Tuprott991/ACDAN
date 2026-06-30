@@ -46,7 +46,8 @@ targets directly:
 
 1. **Discrete search is wasteful** (MCTS / Best-of-N explode compute). ACDAN
    replaces repeated discrete rollouts with **continuous, differentiable**
-   refinement over a task-defined action/candidate space.
+   refinement over a task-defined action/candidate space. In this repo, RAP is
+   the MCTS-style comparison baseline.
 2. **Overthinking** — long reasoning hurts accuracy and burns tokens. ACDAN
    models the workflow as a **dependency graph** and prunes redundant "dead"
    steps, and reuses familiar tool transitions via **inertia**.
@@ -96,6 +97,29 @@ ACDAN requires a finite candidate/action space. For raw free-form text
 generation, wrap the LLM output into candidates first (for example answer
 selection, tool selection, workflow-step selection, or reranking).
 
+The default feature encoder is a dependency-free hash encoder for offline smoke
+tests. For real latent/TTT claims, use `--encoder hf` to extract prompt features
+from a causal LLM's pooled input embeddings or final hidden state before the LM
+head:
+
+```bash
+python -m acdan.run_experiment --method acdan --dataset bfcl \
+  --data-path data/bfcl_full.jsonl \
+  --policy vllm --policy-model Qwen/Qwen2.5-7B-Instruct --prm llm \
+  --encoder hf --encoder-mode last_hidden --encoder-pooling last
+```
+
+This grounds ACDAN's latent state in the policy-model family, but it remains
+controller-side feature extraction. It does not update the base LLM hidden
+states or weights during decoding.
+
+Closest comparison families for the paper are **Best-of-N + verifier/PRM**,
+**MCTS/RAP-style planning**, **Tree of Thoughts**, **Self-Refine**, **s1/budget
+forcing**, and **Process Reward Agents**. The distinction to keep sharp is that
+these methods search, sample, or execute discrete trajectories, while ACDAN
+updates a soft action-logit field with a process reward signal before decoding a
+single plan.
+
 Full details: [`docs/architecture.md`](docs/architecture.md) and the formal
 objective / update rules in [`docs/math.md`](docs/math.md).
 
@@ -106,7 +130,7 @@ objective / update rules in [`docs/math.md`](docs/math.md).
 | Latent reasoning (recurrent unroll) | [`latent_reasoning.py`](src/acdan/latent_reasoning.py) | implemented |
 | In-Place TTT | `latent_reasoning.LatentReasoner._ttt_adapt` | implemented |
 | Differentiable Textual Optimization | [`dto.py`](src/acdan/dto.py) | implemented (analytic grads) |
-| Process Reward Model / LLM-as-PRM | [`rewards.py`](src/acdan/rewards.py), [`prm_adapter.py`](src/acdan/backends/prm_adapter.py) | mock + vLLM-backed adapter |
+| Process Reward Model / LLM-as-PRM | [`rewards.py`](src/acdan/rewards.py), [`prm_adapter.py`](src/acdan/backends/prm_adapter.py) | mock + LLM-backed adapter |
 | Net Information Gain (O(N)) | `rewards.net_information_gain` | implemented |
 | Two-layer graph (EX + ED) | [`graph.py`](src/acdan/graph.py) | implemented |
 | von Neumann entropy / diversity | `graph.von_neumann_entropy`, `make_entropy_hook` | implemented (exact + surrogate) |
@@ -115,8 +139,11 @@ objective / update rules in [`docs/math.md`](docs/math.md).
 | Independent Question Asking | `verification.IndependentVerifier`, [`claude.py`](src/acdan/backends/claude.py) | mock + optional Claude backend |
 | RLCM confidence probe + margin | [`verification.py`](src/acdan/verification.py) | implemented |
 | Calibration (ECE) | `verification.expected_calibration_error` | implemented |
+| Feature encoder | [`encoder.py`](src/acdan/backends/encoder.py) | hash, sentence-transformer, or HF causal-LLM hidden state |
 | Core LLM action scorer | [`registry.py`](src/acdan/registry.py), [`vllm_core.py`](src/acdan/backends/vllm_core.py) | mock + vLLM-backed scorer |
 | Datasets | [`datasets/`](src/acdan/datasets), [`tasks/synthetic.py`](src/acdan/tasks/synthetic.py) | synthetic + local JSONL adapters |
+| MCTS-style baseline | `baselines.reasoning_as_planning` in [`baselines.py`](src/acdan/baselines.py) | implemented as RAP / PUCT approximation |
+| Process Reward Agents comparison | PRM + verifier interfaces; no dedicated PRA agent executor yet | conceptual comparator / future baseline |
 
 Line-level mapping and an explicit *implemented vs. mocked* breakdown:
 [`docs/module_to_paper_mapping.md`](docs/module_to_paper_mapping.md).
@@ -277,9 +304,38 @@ The architecture programs against small interfaces and lazy backends:
 
 Current local adapters cover synthetic tasks, GSM8K/MATH-style answer selection,
 AIME/Omni-MATH-style candidate selection, BFCL/tool-name selection, and GAIA-like
-open-ended data. GAIA/tau2-style fully stateful execution remains an adapter and
-executor milestone; do not report those as final agentic results until execution
-and judging are wired.
+open-ended data. Tau2/tau-bench data is only snapshotted by
+[`scripts/setup_datasets.py`](scripts/setup_datasets.py); there is currently no
+`tau`, `tau2`, or `taubench` dataset adapter in
+[`build_dataset`](src/acdan/datasets/base.py), and no stateful executor/judge in
+the runner. Do not report tau-bench/tau2 as an ACDAN result until that adapter
+and execution layer are wired.
+
+### Agentic benchmark roadmap
+
+Raw setup for these datasets is available with:
+
+```bash
+python scripts/setup_datasets.py --suite agentic_benchmarks --dry-run
+python scripts/setup_datasets.py --suite agentic_benchmarks --overwrite
+```
+
+These are useful external datasets to prioritize once ACDAN has a stateful
+executor adapter, official judges, and budget-matched baselines:
+
+| Domain | Dataset | Original size | Setup key | Current status |
+|---|---|---:|---|---|
+| Search | BrowseComp | 1266 | `browsecomp` | raw snapshot only |
+| Search | WebVoyager | 643 | `webvoyager` | raw snapshot only |
+| Coding | SWE-Bench Verified | 500 | `swe_bench_verified` | raw snapshot only |
+| Coding | Terminal-Bench | 230 | `terminal_bench` | raw archive only |
+| Reason | MathHay | 602 | `mathhay` | raw archive only |
+| Tool-Calling | Tau2-Bench | 278 | `tau2_bench_data`, `tau2_bench_hud` | raw snapshot only |
+| Tool-Calling | MCP-Bench | 104 | `mcp_bench` | raw archive only |
+
+Recommended claim boundary: use these as a **roadmap / future benchmark set**
+until each dataset has an adapter that produces candidate actions, an executor
+that records state transitions, and an official or reproducible judge.
 
 A complete custom-backend template is in
 [`examples/custom_backend.py`](examples/custom_backend.py).
@@ -349,11 +405,13 @@ and local benchmark adapters. These are imported lazily and are not required for
 the offline core.
 
 **Still limited / not yet final:** current BFCL evaluation is tool-name sequence
-selection, not official BFCL executable argument correctness; GAIA/tau2-style
-stateful execution is not a final reported result; PS-GRPO currently trains an
-offline policy head rather than a real LLM/LoRA policy. The current real evidence
-supports ACDAN primarily as a test-time agentic controller, with DTO driving
-accuracy and verification driving calibration.
+selection, not official BFCL executable argument correctness; tau-bench/tau2 and
+other stateful web/coding/search benchmarks are not current reported results;
+Process Reward Agents are a recent comparison family, not a dedicated implemented
+baseline in this repo; PS-GRPO currently trains an offline policy head rather
+than a real LLM/LoRA policy. The current real evidence supports ACDAN primarily
+as a test-time agentic controller, with DTO driving accuracy and verification
+driving calibration.
 
 We do **not** claim SOTA. Report benchmark numbers with the stated evaluator,
 real prompt-token/latency fields, and the limitations above.
