@@ -163,6 +163,8 @@ def run(args: argparse.Namespace) -> dict:
     reasoner = LatentReasoner(config.latent, feature_dim=encoder.dim, seed=args.seed)
     if hasattr(prm, "set_latent_quality_fn"):
         prm.set_latent_quality_fn(reasoner.quality)
+    if hasattr(core, "set_prior_quality_fn"):
+        core.set_prior_quality_fn(reasoner.quality)
 
     if args.dataset in MATH_DATASETS:
         dto_sc = args.math_count_weight if args.math_evidence in {"dto", "all"} else 0.0

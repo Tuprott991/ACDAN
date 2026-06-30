@@ -12,7 +12,7 @@ exact vLLM logprob plumbing should be smoke-tested on the VM (see
 
 from __future__ import annotations
 
-from typing import List
+from typing import Callable, List, Optional
 
 import numpy as np
 
@@ -30,6 +30,7 @@ class VLLMCoreModel:
         dtype: str = "bfloat16",
         gpu_memory_utilization: float = 0.90,
         seed: int = 0,
+        prior_quality_gain: float = 0.15,
     ):
         from vllm import LLM  # lazy
 
@@ -45,6 +46,23 @@ class VLLMCoreModel:
         # Telemetry for real cost reporting.
         self.n_score_batches = 0
         self.n_prompt_tokens = 0
+        # Latent-quality prior gain: mirrors MockCoreModel's lq bump so that a
+        # better latent state yields a sharper (more decisive) prior.
+        self.prior_quality_gain = prior_quality_gain
+        self._prior_quality_fn: Optional[Callable[[np.ndarray], float]] = None
+
+    def set_prior_quality_fn(self, fn: Callable[[np.ndarray], float]) -> None:
+        """Wire in the LatentReasoner's quality measure (called from run_experiment)."""
+        self._prior_quality_fn = fn
+
+    def _prior_temp(self, latent: np.ndarray) -> float:
+        """Temperature multiplier for the prior logits based on latent quality."""
+        fn = self._prior_quality_fn
+        if fn is not None:
+            q = float(fn(latent))
+        else:
+            q = float(np.tanh(np.linalg.norm(latent) / (np.sqrt(latent.size) + 1e-9)))
+        return 1.0 + self.prior_quality_gain * (2.0 * q - 1.0)
 
     # ------------------------------------------------------------- scoring
 
@@ -100,4 +118,7 @@ class VLLMCoreModel:
                     conts.append(str(templates.get(name, name)))
         scores = self._score_continuations(contexts, conts)
         self.n_score_batches += 1
-        return np.asarray(scores, dtype=np.float64).reshape(H, V)
+        raw = np.asarray(scores, dtype=np.float64).reshape(H, V)
+        # Latent quality sharpens the prior (mirrors MockCoreModel's lq bump):
+        # higher quality → trust the model's own scoring more (wider logit spread).
+        return raw * self._prior_temp(latent)

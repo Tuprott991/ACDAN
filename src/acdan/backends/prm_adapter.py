@@ -48,7 +48,7 @@ class LLMAsProcessReward:
         self._latent_quality_fn = latent_quality_fn
         self._yes = self._ids(yes_tokens)
         self._no = self._ids(no_tokens)
-        self._reward_cache: dict[tuple[str, str, int, int], np.ndarray] = {}
+        self._reward_cache: dict[tuple[str, int, int], np.ndarray] = {}
         self._target_cache: dict[tuple[str, str, int, int], np.ndarray] = {}
         self.n_prompt_tokens = 0
 
@@ -97,8 +97,19 @@ class LLMAsProcessReward:
 
     # ------------------------------------------------------ reward field
 
+    def _task_key(self, task: Task) -> tuple[str, int, int]:
+        """Stable key for the raw reward matrix (no latent dependency).
+
+        The LLM reward prompts depend only on the task (prompt text, vocab,
+        action templates) — not on the latent vector — so we cache R per-task.
+        """
+        templates = task.metadata.get("action_templates", {}) or {}
+        task_payload = repr((task.task_id, task.vocab, templates)).encode("utf-8")
+        task_digest = hashlib.blake2b(task_payload, digest_size=12).hexdigest()
+        return (task_digest, task.horizon, task.vocab_size)
+
     def _cache_key(self, task: Task, latent: np.ndarray) -> tuple[str, str, int, int]:
-        """Stable key for LLM reward calls that do not depend on soft probs."""
+        """Stable key for the sharpened target distribution (latent-dependent)."""
         arr = np.ascontiguousarray(latent, dtype=np.float64)
         latent_digest = hashlib.blake2b(arr.view(np.uint8), digest_size=12).hexdigest()
         templates = task.metadata.get("action_templates", {}) or {}
@@ -153,7 +164,7 @@ class LLMAsProcessReward:
         return 0.35 * np.tile(z, (task.horizon, 1))
 
     def step_reward_matrix(self, task: Task, latent: np.ndarray) -> np.ndarray:
-        key = self._cache_key(task, latent)
+        key = self._task_key(task)
         cached = self._reward_cache.get(key)
         if cached is not None:
             return cached.copy()
@@ -176,7 +187,19 @@ class LLMAsProcessReward:
             return cached.copy()
 
         R = self.step_reward_matrix(task, latent)
-        z = self.effective_sharpness(latent) * R
+        # Blend latent quality (geometric alignment) with actual PRM confidence
+        # (mean |R|).  When the LLM reward is decisive the blended signal
+        # justifies sharper targets regardless of encoder quality; when the PRM
+        # is uncertain the blend keeps sharpness conservative.  This prevents
+        # artificially inflated latent quality (e.g., from hash-encoded features
+        # where W_rec bias pumps w-alignment without semantic grounding) from
+        # over-sharpening the DTO objective.
+        prm_confidence = float(np.clip(np.mean(np.abs(R)), 0.0, 1.0))
+        q = 0.5 * self.latent_quality(latent) + 0.5 * prm_confidence
+        gain = float(getattr(self, "latent_quality_gain", 0.5))
+        scale = 1.0 + gain * (2.0 * q - 1.0)
+        eff_sharpness = float(self.sharpness * max(scale, 0.1))
+        z = eff_sharpness * R
         z = z - z.max(axis=1, keepdims=True)
         e = np.exp(z)
         target = e / e.sum(axis=1, keepdims=True)
