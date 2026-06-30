@@ -9,6 +9,8 @@ MODEL=${MODEL:-Qwen/Qwen2.5-7B-Instruct}
 TAG=${TAG:-qwen7b}
 SEEDS=${SEEDS:-"0 1 2"}
 N_VALUES=${N_VALUES:-"1 2 4 8 16"}
+ENCODER_ARGS=${ENCODER_ARGS:-"--encoder hf --encoder-mode last_hidden --encoder-pooling last --encoder-dtype bfloat16 --encoder-max-length 2048"}
+read -r -a ENCODER_ARGV <<< "$ENCODER_ARGS"
 
 mkdir -p results/approval
 
@@ -24,6 +26,7 @@ run_math() {
         $PY -m acdan.run_experiment \
           --method "$method" --dataset "$dataset" --data-path "$data_path" \
           --policy vllm --policy-model "$MODEL" --prm llm \
+          "${ENCODER_ARGV[@]}" \
           --math-evidence none --n "$n" --seed "$seed" --save-per-task \
           --out "results/approval/${dataset}_${TAG}_${method}_n${n}_s${seed}.json"
       done
@@ -35,6 +38,7 @@ run_math() {
     $PY -m acdan.run_experiment \
       --method acdan --dataset "$dataset" --data-path "$data_path" \
       --policy vllm --policy-model "$MODEL" --prm llm \
+      "${ENCODER_ARGV[@]}" \
       --math-evidence "$evidence" --math-count-weight 0.35 \
       --n 8 --seed 0 --save-per-task \
       --out "results/approval/${dataset}_${TAG}_acdan_evidence_${evidence}.json"
@@ -53,6 +57,7 @@ run_bfcl() {
         $PY -m acdan.run_experiment \
           --method "$method" --dataset bfcl --data-path "$test_path" \
           --policy vllm --policy-model "$MODEL" --prm llm \
+          "${ENCODER_ARGV[@]}" \
           --n "$n" --seed "$seed" --save-per-task \
           --fit-inertia --inertia-fit-path "$train_path" \
           --out "results/approval/bfcl_${TAG}_${method}_n${n}_s${seed}.json"
@@ -64,6 +69,7 @@ run_bfcl() {
     $PY -m acdan.run_experiment \
       --method acdan --disable "$abl" --dataset bfcl --data-path "$test_path" \
       --policy vllm --policy-model "$MODEL" --prm llm \
+      "${ENCODER_ARGV[@]}" \
       --n 8 --seed 0 --save-per-task \
       --fit-inertia --inertia-fit-path "$train_path" \
       --out "results/approval/bfcl_${TAG}_abl_${abl}.json"

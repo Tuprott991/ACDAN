@@ -35,24 +35,31 @@ pip install -r requirements-gpu.txt
 Measure real throughput before full runs:
 
 ```bash
+ENCODER_ARGS="--encoder hf --encoder-mode last_hidden --encoder-pooling last \
+  --encoder-dtype bfloat16 --encoder-max-length 2048"
+
 .venv/bin/python -m acdan.run_experiment --method acdan --dataset bfcl \
   --data-path data/bfcl_full.jsonl --limit 50 \
   --policy vllm --policy-model Qwen/Qwen2.5-7B-Instruct --prm llm \
+  $ENCODER_ARGS \
   --out results/_smoke_bfcl.json --save-per-task
 ```
 
 Use `summary.mean_latency_s` from this smoke run to rescale estimates:
 `benchmark_eval_seconds ~= model_load + N_tasks * mean_latency_s`.
 
-Optional real latent encoder smoke test:
+Faster offline/diagnostic smoke tests may still use the default hash encoder, but
+do not use hash-encoder numbers as the main latent/TTT evidence.
+
+Alternative low-memory latent encoder smoke test:
 
 ```bash
 .venv/bin/python -m acdan.run_experiment --method acdan --dataset bfcl \
   --data-path data/bfcl_full.jsonl --limit 25 \
   --policy vllm --policy-model Qwen/Qwen2.5-7B-Instruct --prm llm \
-  --encoder hf --encoder-mode last_hidden --encoder-pooling last \
+  --encoder hf --encoder-mode input_emb --encoder-pooling mean \
   --encoder-dtype bfloat16 --encoder-max-length 2048 \
-  --out results/_smoke_bfcl_hfencoder.json
+  --out results/_smoke_bfcl_hfencoder_lowmem.json
 ```
 
 Memory caveat: with `--policy vllm --encoder hf`, the model may be loaded once
@@ -167,6 +174,17 @@ fixed `--shuffle-seed` before making claims.
 Policies: `Qwen/Qwen2.5-7B-Instruct`, `meta-llama/Llama-3.1-8B-Instruct`,
 `Qwen/Qwen2.5-3B-Instruct`.
 
+Use HF causal-LLM features for all real reported runs:
+
+```bash
+ENCODER_ARGS="--encoder hf --encoder-mode last_hidden --encoder-pooling last \
+  --encoder-dtype bfloat16 --encoder-max-length 2048"
+```
+
+If VRAM is tight, use `--encoder-mode input_emb --encoder-pooling mean`, a
+smaller `--encoder-model`, or run a named low-memory ablation. Do not silently
+fall back to `--encoder hash` for headline latent/TTT claims.
+
 Primary methods: `acdan`, `bon`, `asc`, `sc`, `cot`. `asc` is an early-stopping
 self-consistency baseline: it stops once the plurality answer reaches a
 confidence threshold, giving ACDAN a direct adaptive-compute competitor.
@@ -185,9 +203,11 @@ DTO count prior.
 
 ```bash
 M=Qwen/Qwen2.5-7B-Instruct; TAG=qwen7b; D=data/gsm8k_${TAG}_k8_sample.jsonl
+ENCODER_ARGS="--encoder hf --encoder-mode last_hidden --encoder-pooling last --encoder-dtype bfloat16 --encoder-max-length 2048"
 for METHOD in acdan bon asc sc cot; do
   .venv/bin/python -m acdan.run_experiment --method $METHOD --dataset gsm8k \
     --data-path $D --policy vllm --policy-model $M --prm llm \
+    $ENCODER_ARGS \
     --math-evidence none --n 8 --seed 0 \
     --out results/gsm8k_${TAG}_${METHOD}.json
 done
@@ -199,6 +219,7 @@ Optional secondary baselines at matched `N=8`:
 for METHOD in tot rap refine s1; do
   .venv/bin/python -m acdan.run_experiment --method $METHOD --dataset gsm8k \
     --data-path $D --policy vllm --policy-model $M --prm llm \
+    $ENCODER_ARGS \
     --math-evidence none --n 8 --seed 0 \
     --out results/gsm8k_${TAG}_${METHOD}.json
 done
@@ -210,6 +231,7 @@ Self-consistency evidence ablation, ACDAN only:
 for EVID in none prompt prm dto all; do
   .venv/bin/python -m acdan.run_experiment --method acdan --dataset gsm8k \
     --data-path $D --policy vllm --policy-model $M --prm llm \
+    $ENCODER_ARGS \
     --math-evidence $EVID --math-count-weight 0.35 \
     --out results/gsm8k_${TAG}_evidence_${EVID}.json
 done
@@ -219,6 +241,7 @@ Full approval matrix with per-task artifacts and Pareto collection:
 
 ```bash
 MODEL=Qwen/Qwen2.5-7B-Instruct TAG=qwen7b \
+  ENCODER_ARGS="--encoder hf --encoder-mode last_hidden --encoder-pooling last --encoder-dtype bfloat16 --encoder-max-length 2048" \
   experiments/run_approval_matrix.sh
 ```
 
@@ -235,6 +258,7 @@ latent reasoning.
 for ABL in no_dto no_verification no_latent no_ttt; do
   .venv/bin/python -m acdan.run_experiment --method acdan --disable $ABL \
     --dataset gsm8k --data-path $D --policy vllm --policy-model $M --prm llm \
+    $ENCODER_ARGS \
     --math-evidence none --out results/gsm8k_${TAG}_abl_${ABL}.json
 done
 ```
@@ -251,12 +275,14 @@ or omit it; the runner no longer fits from evaluation gold.
 
 ```bash
 M=Qwen/Qwen2.5-7B-Instruct; TAG=qwen7b
+ENCODER_ARGS="--encoder hf --encoder-mode last_hidden --encoder-pooling last --encoder-dtype bfloat16 --encoder-max-length 2048"
 TRAIN=data/bfcl_dev.jsonl 
 TEST=data/bfcl_full.jsonl
 
 for METHOD in acdan bon asc sc cot; do
   .venv/bin/python -m acdan.run_experiment --method $METHOD --dataset bfcl \
     --data-path $TEST --policy vllm --policy-model $M --prm llm \
+    $ENCODER_ARGS \
     --n 8 --seed 0 \
     --fit-inertia --inertia-fit-path $TRAIN \
     --out results/bfcl_${TAG}_${METHOD}.json
@@ -269,6 +295,7 @@ Secondary BFCL baselines:
 for METHOD in tot rap refine s1; do
   .venv/bin/python -m acdan.run_experiment --method $METHOD --dataset bfcl \
     --data-path $TEST --policy vllm --policy-model $M --prm llm \
+    $ENCODER_ARGS \
     --n 8 --seed 0 \
     --out results/bfcl_${TAG}_${METHOD}.json
 done
@@ -280,6 +307,7 @@ BFCL module ablations for the main table:
 for ABL in no_dto no_graph no_inertia no_verification no_latent no_ttt; do
   .venv/bin/python -m acdan.run_experiment --method acdan --disable $ABL \
     --dataset bfcl --data-path $TEST --policy vllm --policy-model $M --prm llm \
+    $ENCODER_ARGS \
     --n 8 --seed 0 --fit-inertia --inertia-fit-path $TRAIN \
     --out results/bfcl_${TAG}_abl_${ABL}.json
 done
@@ -290,6 +318,7 @@ Calibration study:
 ```bash
 .venv/bin/python -m acdan.run_experiment --method acdan --dataset bfcl \
   --data-path $TEST --policy vllm --policy-model $M --prm llm \
+  $ENCODER_ARGS \
   --verifier claude --judge-model claude-opus-4-8 \
   --fit-inertia --inertia-fit-path $TRAIN \
   --out results/bfcl_${TAG}_acdan_claudeverify.json
