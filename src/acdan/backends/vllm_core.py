@@ -18,7 +18,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from acdan.datasets.base import MATH_DATASETS
+from acdan.datasets.base import ANSWER_SELECTION_DATASETS
 from acdan.types import Task
 
 
@@ -214,10 +214,10 @@ class VLLMCoreModel:
         contexts: List[str] = []
         conts: List[str] = []
         for h in range(H):
-            if family in MATH_DATASETS:
+            if family in ANSWER_SELECTION_DATASETS:
                 ctx = (
-                    "Solve the math problem and evaluate the proposed answer.\n\n"
-                    f"Problem:\n{prompt}\n\n"
+                    "Evaluate whether the proposed answer is correct for the task.\n\n"
+                    f"Task:\n{prompt}\n\n"
                     "Plausible correct candidate:\n"
                 )
             else:
@@ -225,7 +225,7 @@ class VLLMCoreModel:
             for v in range(V):
                 name = task.vocab[v]
                 contexts.append(ctx)
-                if family in MATH_DATASETS:
+                if family in ANSWER_SELECTION_DATASETS:
                     conts.append(str(templates.get(name, f"Final answer: {name}")))
                 else:
                     conts.append(str(templates.get(name, name)))

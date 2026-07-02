@@ -7,6 +7,9 @@ fallback adapter lets the whole real pipeline run offline for smoke tests.
 
 from acdan.datasets.base import (
     RawTask,
+    ANSWER_SELECTION_DATASETS,
+    MATH_DATASETS,
+    ROADMAP_ANSWER_DATASETS,
     SyntheticRawDataset,
     JSONLRawDataset,
     outcome_exact,
@@ -17,6 +20,9 @@ from acdan.datasets.base import (
 
 __all__ = [
     "RawTask",
+    "ANSWER_SELECTION_DATASETS",
+    "MATH_DATASETS",
+    "ROADMAP_ANSWER_DATASETS",
     "SyntheticRawDataset",
     "JSONLRawDataset",
     "outcome_exact",

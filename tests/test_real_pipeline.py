@@ -136,6 +136,42 @@ def test_build_dataset_synthetic_and_checker():
     assert build_outcome_checker("synthetic") is outcome_exact
 
 
+def test_browsecomp_proxy_candidate_dataset_runs_with_exact_checker(tmp_path):
+    path = tmp_path / "browsecomp_proxy_candidates.jsonl"
+    path.write_text(
+        '{"task_id":"b1","question":"Who founded Example Lab?",'
+        '"candidates":["Ada Lovelace","Grace Hopper"],"answer":"Grace Hopper"}\n',
+        encoding="utf-8",
+    )
+    ds = build_dataset("browsecomp_proxy", path=str(path))
+    raw = next(iter(ds.tasks()))
+    assert raw.family == "browsecomp_proxy"
+    assert raw.vocab == ("Ada Lovelace", "Grace Hopper")
+    task = _task(raw)
+    assert build_outcome_checker("browsecomp_proxy")(task, [1]) is True
+    assert build_outcome_checker("browsecomp_proxy")(task, [0]) is False
+
+
+def test_runner_browsecomp_proxy_mock(tmp_path):
+    path = tmp_path / "browsecomp_proxy_candidates.jsonl"
+    path.write_text(
+        '{"task_id":"b1","question":"Capital of France?",'
+        '"candidates":["Paris","Lyon"],"answer":"Paris"}\n',
+        encoding="utf-8",
+    )
+    args = build_parser().parse_args([
+        "--method", "acdan",
+        "--dataset", "browsecomp_proxy",
+        "--data-path", str(path),
+        "--limit", "1",
+        "--no-latent",
+    ])
+    res = run(args)
+    assert res["summary"]["dataset"] == "browsecomp_proxy"
+    assert res["summary"]["n_tasks"] == 1
+    assert res["summary"]["ablation"]["latent_reasoning"] is False
+
+
 def test_hf_encoder_defaults_to_policy_model(monkeypatch):
     captured = {}
 
@@ -285,6 +321,25 @@ def test_runner_ablation_alias():
         ["--method", "acdan", "--disable", "no_dto", "--dataset", "synthetic", "--limit", "8"])
     res = run(args)
     assert res["summary"]["n_tasks"] == 8
+    assert res["summary"]["ablation"]["dto"] is False
+
+
+def test_runner_no_latent_flag_disables_latent_and_ttt():
+    args = build_parser().parse_args(
+        ["--method", "acdan", "--no-latent", "--dataset", "synthetic", "--limit", "8"])
+    res = run(args)
+    flags = res["summary"]["ablation"]
+    assert flags["latent_reasoning"] is False
+    assert flags["in_place_ttt"] is False
+
+
+def test_runner_no_ttt_flag_keeps_latent_reasoning():
+    args = build_parser().parse_args(
+        ["--method", "acdan", "--no-ttt", "--dataset", "synthetic", "--limit", "8"])
+    res = run(args)
+    flags = res["summary"]["ablation"]
+    assert flags["latent_reasoning"] is True
+    assert flags["in_place_ttt"] is False
 
 
 def test_new_baselines_run_offline():

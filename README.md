@@ -97,9 +97,10 @@ ACDAN requires a finite candidate/action space. For raw free-form text
 generation, wrap the LLM output into candidates first (for example answer
 selection, tool selection, workflow-step selection, or reranking).
 
-The default feature encoder is a dependency-free hash encoder for offline smoke
-tests. For real vLLM runs, use `--encoder vllm_hidden` to extract pooled prompt
-hidden states from the same vLLM engine used for action scoring:
+The default feature encoder is a dependency-free hash encoder. Use it for the
+current `--no-latent` main matrix because latent/TTT is intentionally disabled.
+For latent/TTT revisit runs, use `--encoder vllm_hidden` to extract pooled
+prompt hidden states from the same vLLM engine used for action scoring:
 
 ```bash
 python -m acdan.run_experiment --method acdan --dataset bfcl \
@@ -319,22 +320,23 @@ python scripts/setup_datasets.py --suite agentic_benchmarks --dry-run
 python scripts/setup_datasets.py --suite agentic_benchmarks --overwrite
 ```
 
-These are useful external datasets to prioritize once ACDAN has a stateful
-executor adapter, official judges, and budget-matched baselines:
+These are useful external datasets for the AgentBench-style trajectory
+self-choice path:
 
 | Domain | Dataset | Original size | Setup key | Current status |
 |---|---|---:|---|---|
-| Search | BrowseComp | 1266 | `browsecomp` | raw snapshot only |
-| Search | WebVoyager | 643 | `webvoyager` | raw snapshot only |
-| Coding | SWE-Bench Verified | 500 | `swe_bench_verified` | raw snapshot only |
-| Coding | Terminal-Bench | 230 | `terminal_bench` | raw archive only |
-| Reason | MathHay | 602 | `mathhay` | raw archive only |
-| Tool-Calling | Tau2-Bench | 278 | `tau2_bench_data`, `tau2_bench_hud` | raw snapshot only |
-| Tool-Calling | MCP-Bench | 104 | `mcp_bench` | raw archive only |
+| Search | BrowseComp | 1266 | `browsecomp` | task manifest + trajectory self-choice |
+| Search | WebVoyager | 643 | `webvoyager` | task manifest + external evaluator |
+| Coding | SWE-Bench Verified | 500 | `swe_bench_verified` | task manifest + external evaluator |
+| Coding | Terminal-Bench | 230 | `terminal_bench` | task manifest + external evaluator |
+| Reason | MathHay | 602 | `mathhay` | task manifest + trajectory self-choice |
+| Tool-Calling | Tau2-Bench | 278 | `tau2_bench_data`, `tau2_bench_hud` | task manifest + external evaluator |
+| Tool-Calling | MCP-Bench | 104 | `mcp_bench` | task manifest + external evaluator |
 
-Recommended claim boundary: use these as a **roadmap / future benchmark set**
-until each dataset has an adapter that produces candidate actions, an executor
-that records state transitions, and an official or reproducible judge.
+Recommended claim boundary: report these only from candidate trajectories
+generated in the correct agent environment, with official evaluator outputs or a
+configured external evaluator command. Selector-only `*_proxy` datasets are for
+debugging DTO behavior, not General AgentBench claims.
 
 A complete custom-backend template is in
 [`examples/custom_backend.py`](examples/custom_backend.py).

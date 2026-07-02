@@ -1,4 +1,4 @@
-"""Pre-generate K candidate answers per GSM8K/MATH question (preprocessing).
+"""Pre-generate K candidate answers per answer-selection question.
 
 This is the only expensive GPU step for the math benchmarks: it samples K full
 chain-of-thought solutions per question with the policy, extracts each final
@@ -11,7 +11,8 @@ Usage (on the VM):
         --in data/gsm8k_test.jsonl \
         --out data/gsm8k_qwen7b_k8.jsonl --k 8
 
-Input JSONL lines: {"question": "...", "answer": "42"}
+Input JSONL lines: {"question": "...", "answer": "42"}.
+The question field may also be named ``problem`` or ``prompt``.
 Output JSONL lines: {"question": ..., "candidates": ["...","..."], "answer": "42"}
 
 The output also preserves lightweight evidence for the selector:
@@ -35,6 +36,35 @@ def extract_answer(text: str) -> str:
     return extract_final_answer(text)
 
 
+def _question(row: dict) -> str:
+    for key in ("question", "problem", "prompt"):
+        value = row.get(key)
+        if value is not None and str(value).strip():
+            return str(value)
+    raise KeyError("input row must contain one of: question, problem, prompt")
+
+
+def _answer(row: dict) -> str:
+    for key in ("answer", "gold", "final_answer"):
+        value = row.get(key)
+        if value is not None:
+            return str(value)
+    raise KeyError("input row must contain one of: answer, gold, final_answer")
+
+
+def _prompt(question: str, task_kind: str) -> str:
+    if task_kind == "qa":
+        return (
+            "Answer the question. Reason briefly if useful, then end with "
+            "'The answer is <answer>'.\n\n"
+            f"{question}"
+        )
+    return (
+        "Solve the problem step by step and end with 'The answer is <number>'.\n\n"
+        f"{question}"
+    )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
@@ -44,6 +74,12 @@ def main() -> None:
     ap.add_argument("--temperature", type=float, default=0.8)
     ap.add_argument("--max-tokens", type=int, default=512)
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument(
+        "--task-kind",
+        choices=["math", "qa"],
+        default="math",
+        help="Prompt style for candidate generation. Use 'qa' for BrowseComp-style answers.",
+    )
     ap.add_argument(
         "--order",
         choices=["sample", "plurality", "shuffle"],
@@ -69,10 +105,7 @@ def main() -> None:
 
     llm = LLM(model=args.model)
     sp = SamplingParams(n=args.k, temperature=args.temperature, max_tokens=args.max_tokens)
-    prompts = [
-        f"Solve the problem step by step and end with 'The answer is <number>'.\n\n{r['question']}"
-        for r in rows
-    ]
+    prompts = [_prompt(_question(r), args.task_kind) for r in rows]
     outs = llm.generate(prompts, sp)
 
     with open(args.out, "w", encoding="utf-8") as fh:
@@ -103,7 +136,8 @@ def main() -> None:
                 rng.shuffle(ordered)
             cands = [answer for answer, _ in ordered]
             fh.write(json.dumps({
-                "question": r["question"],
+                "task_id": r.get("task_id", f"candidate-{row_idx:05d}"),
+                "question": _question(r),
                 "candidates": cands,
                 "candidate_order": args.order,
                 "candidate_solutions": {
@@ -116,7 +150,7 @@ def main() -> None:
                     answer: meta["first_index"] for answer, meta in ordered
                 },
                 "candidate_sample_answers": sample_answers,
-                "answer": str(r["answer"]),
+                "answer": _answer(r),
             }) + "\n")
     print(f"wrote {len(rows)} tasks -> {args.out}")
 

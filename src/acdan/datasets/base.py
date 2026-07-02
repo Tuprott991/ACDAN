@@ -33,7 +33,8 @@ from acdan.types import Task
 
 
 MATH_DATASETS = frozenset({"gsm8k", "math", "math500", "aime2025", "omni_math"})
-ANSWER_SELECTION_DATASETS = frozenset({"synthetic", "jsonl"}) | MATH_DATASETS
+ROADMAP_ANSWER_DATASETS = frozenset({"browsecomp_proxy", "mathhay_proxy"})
+ANSWER_SELECTION_DATASETS = frozenset({"synthetic", "jsonl"}) | MATH_DATASETS | ROADMAP_ANSWER_DATASETS
 
 
 @dataclass
@@ -120,6 +121,9 @@ def build_dataset(kind: str, path: Optional[str] = None, limit: Optional[int] = 
             raise ValueError("jsonl dataset requires --data-path")
         return JSONLRawDataset(path, family="jsonl", limit=limit)
     if kind in MATH_DATASETS:
+        from acdan.datasets.gsm8k import GSM8KDataset
+        return GSM8KDataset(path, family=kind, limit=limit, **kwargs)
+    if kind in ROADMAP_ANSWER_DATASETS:
         from acdan.datasets.gsm8k import GSM8KDataset
         return GSM8KDataset(path, family=kind, limit=limit, **kwargs)
     if kind in {"bfcl", "toolbench"}:

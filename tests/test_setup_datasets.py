@@ -52,3 +52,26 @@ def test_agentic_benchmark_selection_validation(tmp_path):
     )
 
     assert set(manifest) == {"webvoyager", "mcp_bench"}
+
+
+def test_prepare_browsecomp_writes_answer_source_jsonl(tmp_path, monkeypatch):
+    setup = _setup_module()
+
+    def fake_require_datasets():
+        def fake_load_dataset(name, split, token=None):
+            assert name == "smolagents/browse_comp"
+            assert split == "test"
+            return [
+                {"problem": "Who built ACDAN?", "answer": "Researchers", "problem_topic": "ai"},
+                {"problem": "What is DTO?", "answer": "A selector", "problem_topic": "methods"},
+            ]
+
+        return fake_load_dataset
+
+    monkeypatch.setattr(setup, "_require_datasets", fake_require_datasets)
+    path = setup._prepare_browsecomp(tmp_path, overwrite=True, token=None)
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    assert '"question": "Who built ACDAN?"' in lines[0]
+    assert '"answer": "Researchers"' in lines[0]

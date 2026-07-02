@@ -231,7 +231,8 @@ def prepare_agentic_benchmarks(
     """Prepare raw files for roadmap agentic benchmarks.
 
     The returned manifest records exactly what was attempted and whether it is
-    runnable in ACDAN. Today these are raw snapshots/archives only.
+    runnable in ACDAN. Most entries are raw snapshots/archives only; BrowseComp
+    is also materialized into the repo's answer-candidate source schema.
     """
 
     specs = _agentic_benchmark_specs()
@@ -265,6 +266,12 @@ def prepare_agentic_benchmarks(
                     token=token,
                 )
                 entry["path"] = str(Path(path))
+                if spec.key == "browsecomp":
+                    entry["proxy_jsonl"] = str(_prepare_browsecomp(out_dir, overwrite, token))
+                    entry["agentbench_task_command"] = (
+                        "python experiments/prepare_agentbench.py --datasets browsecomp "
+                        "--out-dir data/agentbench"
+                    )
             elif spec.source_kind == "github_zip":
                 entry["path"] = _download_github_archive(spec.source, raw / spec.key, overwrite)
             else:
@@ -279,6 +286,30 @@ def prepare_agentic_benchmarks(
                 raise
         results[spec.key] = entry
     return results
+
+
+def _prepare_browsecomp(out_dir: Path, overwrite: bool, token: str | None) -> Path:
+    """Write BrowseComp into the repo's answer-candidate source schema."""
+
+    load_dataset = _require_datasets()
+    ds = load_dataset("smolagents/browse_comp", split="test", token=token)
+    path = out_dir / "browsecomp.jsonl"
+    _write_jsonl(
+        path,
+        (
+            {
+                "task_id": f"browsecomp-{i:05d}",
+                "question": str(r["problem"]),
+                "answer": str(r["answer"]),
+                "problem_topic": r.get("problem_topic", ""),
+                "source": "smolagents/browse_comp",
+                "split": "test",
+            }
+            for i, r in enumerate(ds)
+        ),
+        overwrite,
+    )
+    return path
 
 
 def _gsm_answer(answer: str) -> str:
@@ -488,8 +519,18 @@ def prepare_bfcl(out_dir: Path, overwrite: bool, token: str | None) -> dict[str,
                 "category": category,
             })
 
-    count = _write_jsonl(out_dir / "bfcl_full.jsonl", rows, overwrite)
-    return {"bfcl_full": count}
+    full_count = _write_jsonl(out_dir / "bfcl_full.jsonl", rows, overwrite)
+
+    # Keep a deterministic split for inertia fitting versus evaluation. The
+    # full file remains available for compatibility with older experiments.
+    dev_rows = rows[: min(1000, len(rows))]
+    test_start = len(dev_rows)
+    test_rows = rows[test_start: test_start + min(1000, max(0, len(rows) - test_start))]
+    if not test_rows:
+        test_rows = rows
+    dev_count = _write_jsonl(out_dir / "bfcl_dev.jsonl", dev_rows, overwrite)
+    test_count = _write_jsonl(out_dir / "bfcl_test.jsonl", test_rows, overwrite)
+    return {"bfcl_full": full_count, "bfcl_dev": dev_count, "bfcl_test": test_count}
 
 
 def snapshot_agentic_raw(out_dir: Path, token: str | None) -> dict[str, str]:

@@ -1,0 +1,133 @@
+import importlib.util
+import json
+import sys
+
+from acdan.agentbench.adapters import AgentBenchTask, prepare_dataset, read_tasks
+from acdan.agentbench.evaluators import Candidate, CandidateEvaluator
+
+
+def _selection_module():
+    spec = importlib.util.spec_from_file_location(
+        "run_agentbench_selection", "experiments/run_agentbench_selection.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _merge_module():
+    spec = importlib.util.spec_from_file_location(
+        "build_agentbench_candidates", "experiments/build_agentbench_candidates.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_agentbench_generic_mathhay_adapter(tmp_path):
+    source = tmp_path / "raw_mathhay"
+    source.mkdir()
+    (source / "tasks.jsonl").write_text(
+        '{"id":"m1","question":"2+2?","answer":"4"}\n'
+        '{"id":"m2","question":"3+3?","answer":"6"}\n',
+        encoding="utf-8",
+    )
+
+    out = prepare_dataset(
+        "mathhay",
+        tmp_path / "agentbench",
+        source_path=source,
+        limit=1,
+        overwrite=True,
+    )
+    tasks = read_tasks(out)
+
+    assert len(tasks) == 1
+    assert tasks[0].dataset == "mathhay"
+    assert tasks[0].evaluator == "semantic_qa"
+
+
+def test_candidate_evaluator_uses_precomputed_scores():
+    task = AgentBenchTask(
+        task_id="swe-1",
+        dataset="swe_bench_verified",
+        domain="coding",
+        instruction="fix bug",
+        evaluator="external_swe_bench",
+    )
+    ev = CandidateEvaluator()
+
+    assert ev.evaluate(task, Candidate.from_obj({"is_correct": True}, 0))["correct"] is True
+    assert ev.evaluate(task, Candidate.from_obj({"score": 0.25}, 1))["score"] == 0.25
+
+
+def test_agentbench_selection_runner_mock(tmp_path):
+    mod = _selection_module()
+    path = tmp_path / "candidates.jsonl"
+    row = {
+        "task": {
+            "task_id": "b1",
+            "dataset": "browsecomp",
+            "domain": "search",
+            "instruction": "Capital of France?",
+            "evaluator": "semantic_qa",
+            "gold": "Paris",
+        },
+        "candidates": [
+            {"candidate_id": "a", "final_answer": "Lyon", "is_correct": False},
+            {"candidate_id": "b", "final_answer": "Paris", "is_correct": True},
+        ],
+    }
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    args = mod.build_parser().parse_args([
+        "--candidates-path", str(path),
+        "--method", "bon",
+        "--policy", "mock",
+        "--prm", "mock",
+        "--no-latent",
+        "--limit", "1",
+    ])
+    result = mod.run(args)
+
+    assert result["summary"]["n_tasks"] == 1
+    assert result["summary"]["pass_at_k"] == 1.0
+    assert result["summary"]["oracle_score"] == 1.0
+    assert "verification_gap" in result["summary"]
+
+
+def test_build_agentbench_candidates_groups_prediction_lines(tmp_path):
+    mod = _merge_module()
+    tasks = tmp_path / "tasks.jsonl"
+    preds = tmp_path / "predictions.jsonl"
+    out = tmp_path / "candidates.jsonl"
+    task = AgentBenchTask(
+        task_id="b1",
+        dataset="browsecomp",
+        domain="search",
+        instruction="Capital?",
+        evaluator="semantic_qa",
+        gold="Paris",
+    )
+    tasks.write_text(json.dumps(task.to_json()) + "\n", encoding="utf-8")
+    preds.write_text(
+        '{"task_id":"b1","final_answer":"Lyon","is_correct":false}\n'
+        '{"task_id":"b1","final_answer":"Paris","is_correct":true}\n',
+        encoding="utf-8",
+    )
+
+    mod.main([
+        "--tasks", str(tasks),
+        "--predictions", str(preds),
+        "--out", str(out),
+        "--min-candidates", "2",
+    ])
+    row = json.loads(out.read_text(encoding="utf-8").splitlines()[0])
+
+    assert row["task"]["task_id"] == "b1"
+    assert len(row["candidates"]) == 2
+    assert row["candidates"][1]["final_answer"] == "Paris"

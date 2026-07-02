@@ -34,7 +34,13 @@ from acdan.baselines import (
     tree_of_thoughts,
 )
 from acdan.config import ACDANConfig, AblationFlags
-from acdan.datasets.base import MATH_DATASETS, RawTask, build_dataset, build_outcome_checker
+from acdan.datasets.base import (
+    ANSWER_SELECTION_DATASETS,
+    MATH_DATASETS,
+    RawTask,
+    build_dataset,
+    build_outcome_checker,
+)
 from acdan.inertia import InertialSensor
 from acdan.latent_reasoning import LatentReasoner
 from acdan.metrics import expected_calibration_error
@@ -210,8 +216,8 @@ def run(args: argparse.Namespace) -> dict:
         ),
     )
     config = ACDANConfig(name=args.method, seed=args.seed)
+    flags = dataclasses.asdict(AblationFlags())
     if args.disable:
-        flags = dataclasses.asdict(AblationFlags())
         for k in args.disable.split(","):
             k = k.strip()
             if not k:
@@ -223,6 +229,14 @@ def run(args: argparse.Namespace) -> dict:
                     f"or an alias {list(_ABLATION_ALIAS)}."
                 )
             flags[field] = False
+
+    if args.no_latent:
+        flags["latent_reasoning"] = False
+        flags["in_place_ttt"] = False
+    if args.no_ttt:
+        flags["in_place_ttt"] = False
+
+    if args.disable or args.no_latent or args.no_ttt:
         config = dataclasses.replace(config, ablation=AblationFlags(**flags))
 
     _monitor(args, f"loading core policy={args.policy} model={args.policy_model or 'mock'}")
@@ -442,7 +456,7 @@ def run(args: argparse.Namespace) -> dict:
     first_acc = None
     last_acc = None
     highest_count_acc = None
-    if args.dataset in (MATH_DATASETS | {"jsonl"}) and answer_tasks:
+    if args.dataset in (ANSWER_SELECTION_DATASETS - {"synthetic"}) and answer_tasks:
         oracle_acc = float(np.mean([
             any(bool(checker(t, [i])) for i in range(t.vocab_size))
             for t in answer_tasks
@@ -468,6 +482,7 @@ def run(args: argparse.Namespace) -> dict:
         "policy_model": args.policy_model, "prm": args.prm, "seed": args.seed,
         "math_evidence": args.math_evidence if args.dataset in MATH_DATASETS else None,
         "dto_self_consistency_weight": config.dto.self_consistency_weight,
+        "ablation": dataclasses.asdict(config.ablation),
         "inertia_fit_path": args.inertia_fit_path,
         "n_tasks": n,
         "accuracy": float(correct.mean()) if n else 0.0,
@@ -509,10 +524,24 @@ def build_parser() -> argparse.ArgumentParser:
                             "tot", "rap", "refine", "s1"],
                    help="ACDAN or a baseline (incl. ToT, RAP, Self-Refine, s1).")
     p.add_argument("--disable", default="", help="Comma list of ablation flags to disable.")
+    p.add_argument(
+        "--no-latent",
+        action="store_true",
+        help=(
+            "Disable recurrent latent reasoning and in-place TTT. Encoder features "
+            "are still computed, but the reasoner uses the shallow projected state."
+        ),
+    )
+    p.add_argument(
+        "--no-ttt",
+        action="store_true",
+        help="Disable in-place TTT while keeping recurrent latent reasoning enabled.",
+    )
     p.add_argument("--dataset", default="synthetic",
                    choices=[
                        "synthetic", "jsonl", "gsm8k", "math", "math500",
-                       "aime2025", "omni_math", "bfcl", "toolbench", "gaia",
+                       "aime2025", "omni_math", "browsecomp_proxy", "mathhay_proxy",
+                       "bfcl", "toolbench", "gaia",
                    ])
     p.add_argument("--data-path", default=None, help="Local JSONL path for real datasets.")
     p.add_argument("--limit", type=int, default=None, help="Max tasks.")

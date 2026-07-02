@@ -9,9 +9,11 @@ MODEL=${MODEL:-Qwen/Qwen2.5-7B-Instruct}
 TAG=${TAG:-qwen7b}
 SEEDS=${SEEDS:-"0 1 2"}
 N_VALUES=${N_VALUES:-"1 2 4 8 16"}
-ENCODER_ARGS=${ENCODER_ARGS:-"--encoder vllm_hidden --encoder-pooling last"}
+ENCODER_ARGS=${ENCODER_ARGS:-"--encoder hash"}
+LATENT_ARGS=${LATENT_ARGS:-"--no-latent"}
 MONITOR_ARGS=${MONITOR_ARGS:-"--monitor --progress-every 25"}
 read -r -a ENCODER_ARGV <<< "$ENCODER_ARGS"
+read -r -a LATENT_ARGV <<< "$LATENT_ARGS"
 read -r -a MONITOR_ARGV <<< "$MONITOR_ARGS"
 
 mkdir -p results/approval
@@ -29,6 +31,7 @@ run_math() {
           --method "$method" --dataset "$dataset" --data-path "$data_path" \
           --policy vllm --policy-model "$MODEL" --prm llm \
           "${ENCODER_ARGV[@]}" \
+          "${LATENT_ARGV[@]}" \
           "${MONITOR_ARGV[@]}" \
           --math-evidence none --n "$n" --seed "$seed" --save-per-task \
           --out "results/approval/${dataset}_${TAG}_${method}_n${n}_s${seed}.json"
@@ -42,6 +45,7 @@ run_math() {
       --method acdan --dataset "$dataset" --data-path "$data_path" \
       --policy vllm --policy-model "$MODEL" --prm llm \
       "${ENCODER_ARGV[@]}" \
+      "${LATENT_ARGV[@]}" \
       "${MONITOR_ARGV[@]}" \
       --math-evidence "$evidence" --math-count-weight 0.35 \
       --n 8 --seed 0 --save-per-task \
@@ -50,7 +54,7 @@ run_math() {
 }
 
 run_bfcl() {
-  local test_path=${BFCL_TEST:-data/bfcl_full.jsonl}
+  local test_path=${BFCL_TEST:-data/bfcl_test.jsonl}
   local train_path=${BFCL_TRAIN:-data/bfcl_dev.jsonl}
   for seed in $SEEDS; do
     for method in cot sc asc bon acdan; do
@@ -62,6 +66,7 @@ run_bfcl() {
           --method "$method" --dataset bfcl --data-path "$test_path" \
           --policy vllm --policy-model "$MODEL" --prm llm \
           "${ENCODER_ARGV[@]}" \
+          "${LATENT_ARGV[@]}" \
           "${MONITOR_ARGV[@]}" \
           --n "$n" --seed "$seed" --save-per-task \
           --fit-inertia --inertia-fit-path "$train_path" \
@@ -71,10 +76,15 @@ run_bfcl() {
   done
 
   for abl in no_dto no_graph no_inertia no_verification no_latent no_ttt; do
+    local latent_for_abl=("${LATENT_ARGV[@]}")
+    if [[ "$abl" == "no_latent" || "$abl" == "no_ttt" ]]; then
+      latent_for_abl=()
+    fi
     $PY -m acdan.run_experiment \
       --method acdan --disable "$abl" --dataset bfcl --data-path "$test_path" \
       --policy vllm --policy-model "$MODEL" --prm llm \
       "${ENCODER_ARGV[@]}" \
+      "${latent_for_abl[@]}" \
       "${MONITOR_ARGV[@]}" \
       --n 8 --seed 0 --save-per-task \
       --fit-inertia --inertia-fit-path "$train_path" \
