@@ -83,6 +83,7 @@ def write_tasks(path: str | Path, tasks: Iterable[AgentBenchTask], overwrite: bo
 
 def read_tasks(path: str | Path) -> list[AgentBenchTask]:
     tasks: list[AgentBenchTask] = []
+
     with Path(path).open("r", encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()

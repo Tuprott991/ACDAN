@@ -1,18 +1,112 @@
 {
-  "out_dir": "/workspace/ACDAN/data",
-  "suite": "all",
-  "math": {
-    "gsm8k_train": 7473,
-    "gsm8k_test": 1319,
-    "math500": 500,
-    "aime2025": 30,
-    "omni_math": 4428
-  },
-  "bfcl": {
-    "bfcl_full": 2600
-  },
-  "agentic_raw": {
-    "tau2_bench_data": "/workspace/ACDAN/data/raw/tau2_bench_data",
-    "tau2_bench_hud": "/workspace/ACDAN/data/raw/tau2_bench_hud"
+  "out_dir": "/workspace/acdan/data",
+  "suite": "agentic_benchmarks",
+  "agentic_benchmarks": {
+    "browsecomp": {
+      "key": "browsecomp",
+      "domain": "Search",
+      "dataset": "BrowseComp",
+      "original_size": 1266,
+      "source_kind": "hf_dataset",
+      "source": "smolagents/browse_comp",
+      "status": "raw_hf_snapshot",
+      "notes": "Search QA benchmark; requires web/search-capable executor before ACDAN evaluation.",
+      "acdan_runnable": false,
+      "path": "/workspace/acdan/data/raw/agentic_benchmarks/browsecomp",
+      "proxy_jsonl": "/workspace/acdan/data/browsecomp.jsonl",
+      "agentbench_task_command": "python experiments/prepare_agentbench.py --datasets browsecomp --out-dir data/agentbench",
+      "prepared": true
+    },
+    "webvoyager": {
+      "key": "webvoyager",
+      "domain": "Search",
+      "dataset": "WebVoyager",
+      "original_size": 643,
+      "source_kind": "hf_dataset",
+      "source": "agentorg/webvoyager",
+      "status": "raw_hf_snapshot",
+      "notes": "Web navigation tasks; requires browser executor and trajectory judge.",
+      "acdan_runnable": false,
+      "path": "/workspace/acdan/data/raw/agentic_benchmarks/webvoyager",
+      "prepared": true
+    },
+    "swe_bench_verified": {
+      "key": "swe_bench_verified",
+      "domain": "Coding",
+      "dataset": "SWE-Bench Verified",
+      "original_size": 500,
+      "source_kind": "hf_dataset",
+      "source": "SWE-bench/SWE-bench_Verified",
+      "status": "raw_hf_snapshot",
+      "notes": "Patch-generation benchmark; requires SWE-bench harness, checkout cache, and tests.",
+      "acdan_runnable": false,
+      "path": "/workspace/acdan/data/raw/agentic_benchmarks/swe_bench_verified",
+      "prepared": true
+    },
+    "terminal_bench": {
+      "key": "terminal_bench",
+      "domain": "Coding",
+      "dataset": "Terminal-Bench",
+      "original_size": 230,
+      "source_kind": "github_zip",
+      "source": "laude-institute/terminal-bench-datasets",
+      "status": "raw_github_archive",
+      "notes": "Containerized terminal tasks; requires Terminal-Bench/Harbor executor.",
+      "acdan_runnable": false,
+      "path": "/workspace/acdan/data/raw/agentic_benchmarks/terminal_bench",
+      "prepared": true
+    },
+    "mathhay": {
+      "key": "mathhay",
+      "domain": "Reason",
+      "dataset": "MathHay",
+      "original_size": 602,
+      "source_kind": "github_zip",
+      "source": "cxcscmu/General-AgentBench",
+      "status": "raw_general_agentbench_archive",
+      "notes": "General-AgentBench reasoning subset; extract the MathHay split before adapter work.",
+      "acdan_runnable": false,
+      "path": "/workspace/acdan/data/raw/agentic_benchmarks/mathhay",
+      "prepared": true
+    },
+    "tau2_bench_data": {
+      "key": "tau2_bench_data",
+      "domain": "Tool-Calling",
+      "dataset": "Tau2-Bench data",
+      "original_size": 278,
+      "source_kind": "hf_dataset",
+      "source": "HuggingFaceH4/tau2-bench-data",
+      "status": "raw_hf_snapshot",
+      "notes": "Stateful tau2 source material; requires simulator/executor and final-answer judge.",
+      "acdan_runnable": false,
+      "path": "/workspace/acdan/data/raw/agentic_benchmarks/tau2_bench_data",
+      "prepared": true
+    },
+    "tau2_bench_hud": {
+      "key": "tau2_bench_hud",
+      "domain": "Tool-Calling",
+      "dataset": "Tau2-Bench HUD",
+      "original_size": 278,
+      "source_kind": "hf_dataset",
+      "source": "Genteki/tau2-bench",
+      "status": "raw_hf_snapshot",
+      "notes": "HUD-format tau2 tasks; paired with tau2 data when building the adapter.",
+      "acdan_runnable": false,
+      "path": "/workspace/acdan/data/raw/agentic_benchmarks/tau2_bench_hud",
+      "prepared": true
+    },
+    "mcp_bench": {
+      "key": "mcp_bench",
+      "domain": "Tool-Calling",
+      "dataset": "MCP-Bench",
+      "original_size": 104,
+      "source_kind": "github_zip",
+      "source": "Accenture/mcp-bench",
+      "status": "raw_github_archive",
+      "notes": "MCP server benchmark; requires MCP servers/tools and trajectory/task-completion judge.",
+      "acdan_runnable": false,
+      "path": "/workspace/acdan/data/raw/agentic_benchmarks/mcp_bench",
+      "prepared": true
+    }
   }
 }
