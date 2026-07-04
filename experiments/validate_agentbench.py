@@ -80,7 +80,11 @@ def validate_tasks(path: Path) -> list[str]:
     return errors
 
 
-def validate_candidates(path: Path, min_candidates: int) -> list[str]:
+def validate_candidates(
+    path: Path,
+    min_candidates: int,
+    allow_external_unscored: bool = False,
+) -> list[str]:
     errors: list[str] = []
     rows = _read_jsonl(path)
     for i, row in enumerate(rows):
@@ -96,7 +100,7 @@ def validate_candidates(path: Path, min_candidates: int) -> list[str]:
         if len(candidates) < min_candidates:
             errors.append(f"{prefix}: expected at least {min_candidates} candidates, found {len(candidates)}")
         evaluator = str(task.get("evaluator", ""))
-        if evaluator in EXTERNAL_EVALS:
+        if evaluator in EXTERNAL_EVALS and not allow_external_unscored:
             for j, cand in enumerate(candidates):
                 if "score" not in cand and "is_correct" not in cand:
                     errors.append(
@@ -113,6 +117,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--tasks", nargs="*", default=[])
     ap.add_argument("--candidates", nargs="*", default=[])
     ap.add_argument("--min-candidates", type=int, default=1)
+    ap.add_argument(
+        "--allow-external-unscored",
+        action="store_true",
+        help=(
+            "Allow external-evaluator candidates without score/is_correct. "
+            "Use only when selection will receive --evaluator-command, or for smoke runs."
+        ),
+    )
     args = ap.parse_args(argv)
 
     task_paths = [Path(p) for p in args.tasks]
@@ -122,7 +134,9 @@ def main(argv: list[str] | None = None) -> int:
     for path in task_paths:
         errors.extend(validate_tasks(path))
     for path in [Path(p) for p in args.candidates]:
-        errors.extend(validate_candidates(path, args.min_candidates))
+        errors.extend(
+            validate_candidates(path, args.min_candidates, args.allow_external_unscored)
+        )
 
     if errors:
         for err in errors:

@@ -18,11 +18,18 @@ ENCODER_ARGS=${ENCODER_ARGS:-"--encoder hash"}
 LATENT_ARGS=${LATENT_ARGS:-"--no-latent"}
 MONITOR_ARGS=${MONITOR_ARGS:-"--monitor --progress-every 25"}
 EVALUATOR_ARGS=${EVALUATOR_ARGS:-""}
+SELECTOR_ARGS=${SELECTOR_ARGS:-"--task-preview-chars 4096 --candidate-preview-chars 2048"}
+VALIDATOR_ARGS=${VALIDATOR_ARGS:-""}
 
 read -r -a ENCODER_ARGV <<< "$ENCODER_ARGS"
 read -r -a LATENT_ARGV <<< "$LATENT_ARGS"
 read -r -a MONITOR_ARGV <<< "$MONITOR_ARGS"
 read -r -a EVALUATOR_ARGV <<< "$EVALUATOR_ARGS"
+read -r -a SELECTOR_ARGV <<< "$SELECTOR_ARGS"
+read -r -a VALIDATOR_ARGV <<< "$VALIDATOR_ARGS"
+if [[ -n "$EVALUATOR_ARGS" ]]; then
+  VALIDATOR_ARGV+=("--allow-external-unscored")
+fi
 
 mkdir -p "$OUT_DIR"
 
@@ -43,7 +50,8 @@ for dataset in $DATASETS; do
   "$PY" experiments/validate_agentbench.py \
     --tasks "$task_path" \
     --candidates "$cand_path" \
-    --min-candidates "$K"
+    --min-candidates "$K" \
+    "${VALIDATOR_ARGV[@]}"
 
   for method in $METHODS; do
     "$PY" experiments/run_agentbench_selection.py \
@@ -54,6 +62,7 @@ for dataset in $DATASETS; do
       "${LATENT_ARGV[@]}" \
       "${MONITOR_ARGV[@]}" \
       "${EVALUATOR_ARGV[@]}" \
+      "${SELECTOR_ARGV[@]}" \
       --n "$K" --seed 0 --save-per-task \
       --out "${OUT_DIR}/${dataset}_${TAG}_${method}.json"
   done

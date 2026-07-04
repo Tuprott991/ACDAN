@@ -513,10 +513,23 @@ $PY experiments/build_agentbench_candidates.py \
   --out data/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl \
   --min-candidates 8
 
+# Strict validation; use this when candidates already contain official scores.
 $PY experiments/validate_agentbench.py \
   --tasks data/agentbench/${DATASET}_tasks.jsonl \
   --candidates data/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl \
   --min-candidates 8
+```
+
+For external evaluators such as BrowseComp, generated predictions will not have
+`score`/`is_correct` until the official harness scores them. Use structural
+validation only while you are about to pass an evaluator command:
+
+```bash
+$PY experiments/validate_agentbench.py \
+  --tasks data/agentbench/${DATASET}_tasks.jsonl \
+  --candidates data/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl \
+  --min-candidates 8 \
+  --allow-external-unscored
 ```
 
 For official environment benchmarks, fill `is_correct` or `score` from the
@@ -525,21 +538,29 @@ official harness, or pass an evaluator command. Run ACDAN self-choice:
 ```bash
 DATASET=browsecomp
 CAND=data/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl
+SELECTOR_ARGS="--task-preview-chars 4096 --candidate-preview-chars 2048"
 
 for METHOD in acdan bon asc sc cot; do
   $PY experiments/run_agentbench_selection.py --method $METHOD \
     --candidates-path $CAND \
     --policy vllm --policy-model $M --prm llm \
-    $ENCODER_ARGS $LATENT_ARGS $MONITOR_ARGS \
+    $ENCODER_ARGS $LATENT_ARGS $MONITOR_ARGS $SELECTOR_ARGS \
     --n 8 --seed 0 --save-per-task \
     --out results/agentbench/${DATASET}_${TAG}_${METHOD}.json
 done
 ```
 
+`--task-preview-chars` and `--candidate-preview-chars` prevent the selector from
+asking vLLM to score an entire long task/trajectory as a continuation. This is
+still a fair selector comparison because every method sees the same preview
+budget. Set either value to `0` only for short inputs or if you intentionally
+want full-text scoring.
+
 Run the same comparison for every dataset that has a non-empty candidate file:
 
 ```bash
 AGENTBENCH_DATASETS="browsecomp webvoyager swe_bench_verified tau2_bench"
+SELECTOR_ARGS="--task-preview-chars 4096 --candidate-preview-chars 2048"
 for DATASET in $AGENTBENCH_DATASETS; do
   CAND=data/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl
   $PY experiments/validate_agentbench.py \
@@ -551,7 +572,7 @@ for DATASET in $AGENTBENCH_DATASETS; do
     $PY experiments/run_agentbench_selection.py --method $METHOD \
       --candidates-path $CAND \
       --policy vllm --policy-model $M --prm llm \
-      $ENCODER_ARGS $LATENT_ARGS $MONITOR_ARGS \
+      $ENCODER_ARGS $LATENT_ARGS $MONITOR_ARGS $SELECTOR_ARGS \
       --n 8 --seed 0 --save-per-task \
       --out results/agentbench/${DATASET}_${TAG}_${METHOD}.json
   done
@@ -564,6 +585,7 @@ Equivalent matrix script:
 DATASETS="browsecomp webvoyager swe_bench_verified tau2_bench" \
 TAG=qwen7b K=8 MODEL=$M \
 ENCODER_ARGS="--encoder hash" LATENT_ARGS="--no-latent" \
+SELECTOR_ARGS="--task-preview-chars 4096 --candidate-preview-chars 2048" \
 experiments/run_agentbench_matrix.sh
 ```
 
@@ -573,9 +595,19 @@ External evaluator examples:
 $PY experiments/run_agentbench_selection.py --method acdan \
   --candidates-path results/agentbench/swe_bench_verified_${TAG}_k8_candidates.jsonl \
   --policy vllm --policy-model $M --prm llm \
-  $ENCODER_ARGS $LATENT_ARGS $MONITOR_ARGS \
+  $ENCODER_ARGS $LATENT_ARGS $MONITOR_ARGS $SELECTOR_ARGS \
   --evaluator-command external_swe_bench="python official_swe_eval.py --input {input} --output {output}" \
   --out results/agentbench/swe_bench_verified_${TAG}_acdan.json
+```
+
+For a smoke run without official scores, add `--allow-unevaluated`; do not
+report those metrics, because every unscored external candidate is treated as
+incorrect.
+
+```bash
+VALIDATOR_ARGS="--allow-external-unscored" \
+SELECTOR_ARGS="--task-preview-chars 4096 --candidate-preview-chars 2048 --allow-unevaluated" \
+experiments/run_agentbench_matrix.sh
 ```
 
 Do not report `browsecomp_proxy`/`mathhay_proxy` as General AgentBench. Those

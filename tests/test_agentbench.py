@@ -39,6 +39,17 @@ def _prediction_module():
     return module
 
 
+def _validator_module():
+    spec = importlib.util.spec_from_file_location(
+        "validate_agentbench", "experiments/validate_agentbench.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_agentbench_generic_mathhay_adapter(tmp_path):
     source = tmp_path / "raw_mathhay"
     source.mkdir()
@@ -109,6 +120,57 @@ def test_agentbench_selection_runner_mock(tmp_path):
     assert result["summary"]["pass_at_k"] == 1.0
     assert result["summary"]["oracle_score"] == 1.0
     assert "verification_gap" in result["summary"]
+
+
+def test_agentbench_raw_task_truncates_long_candidates():
+    mod = _selection_module()
+    task = AgentBenchTask(
+        task_id="b1",
+        dataset="browsecomp",
+        domain="search",
+        instruction="Find the answer from web evidence.",
+        evaluator="external_browsecomp",
+    )
+    cand = Candidate.from_obj(
+        {
+            "candidate_id": "0",
+            "final_answer": "A" * 120,
+            "trajectory": [{"role": "assistant", "content": "B" * 120}],
+        },
+        0,
+    )
+
+    raw = mod._raw_task(task, [cand], candidate_preview_chars=64)
+
+    text = raw.action_templates["0"]
+    assert len(text) < len(cand.display_text())
+    assert "[truncated candidate for selector scoring]" in text
+
+
+def test_agentbench_validator_can_allow_external_unscored_candidates(tmp_path):
+    mod = _validator_module()
+    path = tmp_path / "candidates.jsonl"
+    row = {
+        "task": {
+            "task_id": "b1",
+            "dataset": "browsecomp",
+            "domain": "search",
+            "instruction": "Encrypted BrowseComp task requiring official scoring.",
+            "evaluator": "external_browsecomp",
+        },
+        "candidates": [{"candidate_id": "0", "final_answer": "raw prediction"}],
+    }
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    strict_errors = mod.validate_candidates(path, min_candidates=1)
+    allowed_errors = mod.validate_candidates(
+        path,
+        min_candidates=1,
+        allow_external_unscored=True,
+    )
+
+    assert strict_errors
+    assert allowed_errors == []
 
 
 def test_build_agentbench_candidates_groups_prediction_lines(tmp_path):

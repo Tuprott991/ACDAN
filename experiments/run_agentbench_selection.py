@@ -85,12 +85,27 @@ def _load_candidate_rows(path: str | Path, limit: int | None = None) -> list[dic
     return rows
 
 
-def _raw_task(task: AgentBenchTask, candidates: list[Candidate]) -> RawTask:
+def _text_preview(text: str, limit: int, label: str) -> str:
+    if limit <= 0 or len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + f"\n\n[truncated {label} for selector scoring]"
+
+
+def _raw_task(
+    task: AgentBenchTask,
+    candidates: list[Candidate],
+    candidate_preview_chars: int = 2048,
+    task_preview_chars: int = 4096,
+) -> RawTask:
     labels = tuple(c.candidate_id for c in candidates)
-    templates = {c.candidate_id: c.display_text() for c in candidates}
+    templates = {
+        c.candidate_id: _text_preview(c.display_text(), candidate_preview_chars, "candidate")
+        for c in candidates
+    }
+    prompt = _text_preview(task.instruction, task_preview_chars, "task")
     return RawTask(
         task_id=task.task_id,
-        prompt=task.instruction,
+        prompt=prompt,
         vocab=labels,
         horizon=1,
         gold=None,
@@ -158,7 +173,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         candidates = [Candidate.from_obj(c, i) for i, c in enumerate(row["candidates"])]
         if not candidates:
             continue
-        raw = _raw_task(task_spec, candidates)
+        raw = _raw_task(
+            task_spec,
+            candidates,
+            args.candidate_preview_chars,
+            args.task_preview_chars,
+        )
         task = _to_task(raw, encoder.encode(raw.prompt))
         ab = config.ablation
         trace = (
@@ -244,6 +264,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--encoder-max-length", type=int, default=2048)
     p.add_argument("--trust-remote-code", action="store_true")
     p.add_argument("--n", type=int, default=8)
+    p.add_argument(
+        "--candidate-preview-chars",
+        type=int,
+        default=2048,
+        help=(
+            "Maximum characters from each candidate trajectory shown to the selector. "
+            "Use 0 to score full candidates."
+        ),
+    )
+    p.add_argument(
+        "--task-preview-chars",
+        type=int,
+        default=4096,
+        help="Maximum task-instruction characters shown to the selector. Use 0 for full tasks.",
+    )
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--no-latent", action="store_true")
     p.add_argument("--no-ttt", action="store_true")
