@@ -173,6 +173,66 @@ def test_agentbench_validator_can_allow_external_unscored_candidates(tmp_path):
     assert allowed_errors == []
 
 
+def test_agentbench_selection_cli_fails_cleanly_on_unscored_external(tmp_path, capsys):
+    mod = _selection_module()
+    path = tmp_path / "candidates.jsonl"
+    row = {
+        "task": {
+            "task_id": "b1",
+            "dataset": "browsecomp",
+            "domain": "search",
+            "instruction": "Encrypted BrowseComp task requiring official scoring.",
+            "evaluator": "external_browsecomp",
+        },
+        "candidates": [{"candidate_id": "0", "final_answer": "raw prediction"}],
+    }
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    rc = mod.main([
+        "--candidates-path", str(path),
+        "--method", "cot",
+        "--policy", "mock",
+        "--prm", "mock",
+        "--no-latent",
+    ])
+    captured = capsys.readouterr()
+
+    assert rc == 2
+    assert "ERROR:" in captured.err
+    assert "--allow-unevaluated" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_agentbench_selection_allows_explicit_unscored_smoke(tmp_path):
+    mod = _selection_module()
+    path = tmp_path / "candidates.jsonl"
+    row = {
+        "task": {
+            "task_id": "b1",
+            "dataset": "browsecomp",
+            "domain": "search",
+            "instruction": "Encrypted BrowseComp task requiring official scoring.",
+            "evaluator": "external_browsecomp",
+        },
+        "candidates": [{"candidate_id": "0", "final_answer": "raw prediction"}],
+    }
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    args = mod.build_parser().parse_args([
+        "--candidates-path", str(path),
+        "--method", "cot",
+        "--policy", "mock",
+        "--prm", "mock",
+        "--no-latent",
+        "--allow-unevaluated",
+    ])
+    result = mod.run(args)
+
+    assert result["summary"]["n_tasks"] == 1
+    assert result["summary"]["selected_accuracy"] == 0.0
+    assert result["per_task"] == []
+
+
 def test_build_agentbench_candidates_groups_prediction_lines(tmp_path):
     mod = _merge_module()
     tasks = tmp_path / "tasks.jsonl"

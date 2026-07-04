@@ -605,8 +605,8 @@ report those metrics, because every unscored external candidate is treated as
 incorrect.
 
 ```bash
-VALIDATOR_ARGS="--allow-external-unscored" \
-SELECTOR_ARGS="--task-preview-chars 4096 --candidate-preview-chars 2048 --allow-unevaluated" \
+ALLOW_UNEVALUATED=1 \
+SELECTOR_ARGS="--task-preview-chars 4096 --candidate-preview-chars 2048" \
 experiments/run_agentbench_matrix.sh
 ```
 

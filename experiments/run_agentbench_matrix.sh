@@ -20,6 +20,7 @@ MONITOR_ARGS=${MONITOR_ARGS:-"--monitor --progress-every 25"}
 EVALUATOR_ARGS=${EVALUATOR_ARGS:-""}
 SELECTOR_ARGS=${SELECTOR_ARGS:-"--task-preview-chars 4096 --candidate-preview-chars 2048"}
 VALIDATOR_ARGS=${VALIDATOR_ARGS:-""}
+ALLOW_UNEVALUATED=${ALLOW_UNEVALUATED:-0}
 
 read -r -a ENCODER_ARGV <<< "$ENCODER_ARGS"
 read -r -a LATENT_ARGV <<< "$LATENT_ARGS"
@@ -29,6 +30,10 @@ read -r -a SELECTOR_ARGV <<< "$SELECTOR_ARGS"
 read -r -a VALIDATOR_ARGV <<< "$VALIDATOR_ARGS"
 if [[ -n "$EVALUATOR_ARGS" ]]; then
   VALIDATOR_ARGV+=("--allow-external-unscored")
+fi
+if [[ "$ALLOW_UNEVALUATED" == "1" || "$ALLOW_UNEVALUATED" == "true" ]]; then
+  VALIDATOR_ARGV+=("--allow-external-unscored")
+  SELECTOR_ARGV+=("--allow-unevaluated")
 fi
 
 mkdir -p "$OUT_DIR"

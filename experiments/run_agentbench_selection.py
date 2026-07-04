@@ -36,7 +36,7 @@ if str(SRC) not in sys.path:
 
 from acdan.agent import ACDANAgent
 from acdan.agentbench.adapters import AgentBenchTask
-from acdan.agentbench.evaluators import Candidate, CandidateEvaluator
+from acdan.agentbench.evaluators import Candidate, CandidateEvaluator, EXTERNAL_EVALUATORS
 from acdan.baselines import (
     adaptive_self_consistency,
     best_of_n_prm,
@@ -83,6 +83,39 @@ def _load_candidate_rows(path: str | Path, limit: int | None = None) -> list[dic
             if limit and len(rows) >= limit:
                 break
     return rows
+
+
+def _candidate_is_scored(candidate: Candidate) -> bool:
+    return "score" in candidate.raw or "is_correct" in candidate.raw
+
+
+def _has_external_command(evaluator: str, external_commands: dict[str, str]) -> bool:
+    env_key = "ACDAN_" + evaluator.upper() + "_CMD"
+    return bool(external_commands.get(evaluator) or os.environ.get(env_key))
+
+
+def _preflight_evaluation(
+    rows: list[dict[str, Any]],
+    external_commands: dict[str, str],
+    allow_unevaluated: bool,
+) -> None:
+    for line_no, row in enumerate(rows, start=1):
+        task = _task_from_dict(row["task"])
+        if task.evaluator not in EXTERNAL_EVALUATORS:
+            continue
+        candidates = [Candidate.from_obj(c, i) for i, c in enumerate(row["candidates"])]
+        if not candidates or all(_candidate_is_scored(c) for c in candidates):
+            continue
+        if allow_unevaluated or _has_external_command(task.evaluator, external_commands):
+            continue
+        env_key = "ACDAN_" + task.evaluator.upper() + "_CMD"
+        raise RuntimeError(
+            f"{task.dataset} row {line_no} uses evaluator '{task.evaluator}', but at least "
+            "one candidate has no score/is_correct. Provide official scores, pass "
+            f"--evaluator-command {task.evaluator}=<cmd>, set {env_key}, or add "
+            "--allow-unevaluated for a smoke run only. Unscored external-evaluator "
+            "runs are not reportable metrics."
+        )
 
 
 def _text_preview(text: str, limit: int, label: str) -> str:
@@ -138,6 +171,10 @@ def _select(method: str, core, prm, reasoner, verifier, config, task, latent, n:
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    candidate_rows = _load_candidate_rows(args.candidates_path, args.limit)
+    external_commands = _parse_external(args.evaluator_command)
+    _preflight_evaluation(candidate_rows, external_commands, args.allow_unevaluated)
+
     config = ACDANConfig(name=args.method, seed=args.seed)
     if args.no_latent:
         config = dataclasses.replace(
@@ -162,13 +199,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         prm.set_latent_quality_fn(reasoner.quality)
     verifier = SelfVerifier(config.verification, probe=None, independent=None)
     evaluator = CandidateEvaluator(
-        external_commands=_parse_external(args.evaluator_command),
+        external_commands=external_commands,
         allow_unevaluated=args.allow_unevaluated,
     )
 
     rows = []
     t0 = time.perf_counter()
-    for idx, row in enumerate(_load_candidate_rows(args.candidates_path, args.limit), start=1):
+    for idx, row in enumerate(candidate_rows, start=1):
         task_spec = _task_from_dict(row["task"])
         candidates = [Candidate.from_obj(c, i) for i, c in enumerate(row["candidates"])]
         if not candidates:
@@ -293,5 +330,14 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def main(argv: list[str] | None = None) -> int:
+    try:
+        run(build_parser().parse_args(argv))
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
 if __name__ == "__main__":
-    run(build_parser().parse_args())
+    raise SystemExit(main())
