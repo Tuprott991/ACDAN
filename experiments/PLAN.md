@@ -533,12 +533,13 @@ $PY experiments/validate_agentbench.py \
 ```
 
 For official environment benchmarks, fill `is_correct` or `score` from the
-official harness, or pass an evaluator command. Run ACDAN self-choice:
+official harness, or pass an evaluator command. This is the reportable path:
 
 ```bash
 DATASET=browsecomp
 CAND=data/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl
 SELECTOR_ARGS="--task-preview-chars 4096 --candidate-preview-chars 2048"
+export ACDAN_EXTERNAL_BROWSECOMP_CMD="python official_browsecomp_eval.py --input {input} --output {output}"
 
 for METHOD in acdan bon asc sc cot; do
   $PY experiments/run_agentbench_selection.py --method $METHOD \
@@ -561,12 +562,14 @@ Run the same comparison for every dataset that has a non-empty candidate file:
 ```bash
 AGENTBENCH_DATASETS="browsecomp webvoyager swe_bench_verified tau2_bench"
 SELECTOR_ARGS="--task-preview-chars 4096 --candidate-preview-chars 2048"
+export ACDAN_EXTERNAL_BROWSECOMP_CMD="python official_browsecomp_eval.py --input {input} --output {output}"
 for DATASET in $AGENTBENCH_DATASETS; do
   CAND=data/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl
   $PY experiments/validate_agentbench.py \
     --tasks data/agentbench/${DATASET}_tasks.jsonl \
     --candidates $CAND \
-    --min-candidates 8
+    --min-candidates 8 \
+    --allow-external-unscored
 
   for METHOD in acdan bon asc sc cot; do
     $PY experiments/run_agentbench_selection.py --method $METHOD \
@@ -586,6 +589,7 @@ DATASETS="browsecomp webvoyager swe_bench_verified tau2_bench" \
 TAG=qwen7b K=8 MODEL=$M \
 ENCODER_ARGS="--encoder hash" LATENT_ARGS="--no-latent" \
 SELECTOR_ARGS="--task-preview-chars 4096 --candidate-preview-chars 2048" \
+ACDAN_EXTERNAL_BROWSECOMP_CMD="python official_browsecomp_eval.py --input {input} --output {output}" \
 experiments/run_agentbench_matrix.sh
 ```
 
@@ -605,6 +609,15 @@ report those metrics, because every unscored external candidate is treated as
 incorrect.
 
 ```bash
+DATASET=browsecomp
+CAND=data/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl
+$PY experiments/run_agentbench_selection.py --method cot \
+  --candidates-path $CAND \
+  --policy mock --prm mock \
+  $ENCODER_ARGS $LATENT_ARGS \
+  --allow-unevaluated --limit 3 \
+  --out results/agentbench/${DATASET}_${TAG}_smoke_unscored.json
+
 ALLOW_UNEVALUATED=1 \
 SELECTOR_ARGS="--task-preview-chars 4096 --candidate-preview-chars 2048" \
 experiments/run_agentbench_matrix.sh

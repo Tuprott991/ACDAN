@@ -31,6 +31,9 @@ read -r -a VALIDATOR_ARGV <<< "$VALIDATOR_ARGS"
 if [[ -n "$EVALUATOR_ARGS" ]]; then
   VALIDATOR_ARGV+=("--allow-external-unscored")
 fi
+if compgen -A variable ACDAN_EXTERNAL_ >/dev/null; then
+  VALIDATOR_ARGV+=("--allow-external-unscored")
+fi
 if [[ "$ALLOW_UNEVALUATED" == "1" || "$ALLOW_UNEVALUATED" == "true" ]]; then
   VALIDATOR_ARGV+=("--allow-external-unscored")
   SELECTOR_ARGV+=("--allow-unevaluated")
