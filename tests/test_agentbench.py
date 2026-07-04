@@ -28,6 +28,17 @@ def _merge_module():
     return module
 
 
+def _prediction_module():
+    spec = importlib.util.spec_from_file_location(
+        "gen_agentbench_predictions", "experiments/gen_agentbench_predictions.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_agentbench_generic_mathhay_adapter(tmp_path):
     source = tmp_path / "raw_mathhay"
     source.mkdir()
@@ -131,3 +142,31 @@ def test_build_agentbench_candidates_groups_prediction_lines(tmp_path):
     assert row["task"]["task_id"] == "b1"
     assert len(row["candidates"]) == 2
     assert row["candidates"][1]["final_answer"] == "Paris"
+
+
+def test_gen_agentbench_predictions_mock_writes_prediction_lines(tmp_path):
+    mod = _prediction_module()
+    tasks = tmp_path / "tasks.jsonl"
+    out = tmp_path / "predictions.jsonl"
+    task = AgentBenchTask(
+        task_id="m1",
+        dataset="mathhay",
+        domain="reason",
+        instruction="2+2?",
+        evaluator="semantic_qa",
+        gold="4",
+    )
+    tasks.write_text(json.dumps(task.to_json()) + "\n", encoding="utf-8")
+
+    mod.main([
+        "--tasks", str(tasks),
+        "--out", str(out),
+        "--backend", "mock",
+        "--k", "3",
+    ])
+    rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+
+    assert len(rows) == 3
+    assert rows[0]["task_id"] == "m1"
+    assert rows[0]["is_correct"] is True
+    assert rows[1]["is_correct"] is False

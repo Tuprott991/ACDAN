@@ -462,7 +462,26 @@ $PY experiments/validate_agentbench.py \
           data/agentbench/mcp_bench_tasks.jsonl
 ```
 
-Generate or import K candidate trajectories per task into this schema:
+Generate or import K candidate trajectories per task. The repo provides a
+generic text-attempt generator that creates `*_predictions.jsonl`; for
+WebVoyager/SWE/Terminal/Tau2/MCP, replace or post-process these attempts with
+real executor trajectories and official scores before making paper claims.
+
+```bash
+DATASET=browsecomp
+$PY experiments/gen_agentbench_predictions.py \
+  --tasks data/agentbench/${DATASET}_tasks.jsonl \
+  --out results/agentbench/${DATASET}_${TAG}_predictions.jsonl \
+  --backend vllm --model $M --k 8 --temperature 0.8 --max-tokens 1024
+
+# CPU-only smoke test; not a paper result.
+$PY experiments/gen_agentbench_predictions.py \
+  --tasks data/agentbench/${DATASET}_tasks.jsonl \
+  --out results/agentbench/${DATASET}_${TAG}_predictions_mock.jsonl \
+  --backend mock --k 2 --limit 3
+```
+
+The prediction/candidate schema is:
 
 ```json
 {
