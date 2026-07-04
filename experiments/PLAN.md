@@ -122,10 +122,12 @@ BFCL caveat: the current adapter preserves `gold_calls`, but the runner selects
 tool names, not full function-call argument ASTs. Final BFCL claims should still
 be checked against the official AST/executable evaluation when implemented.
 
-### 1b. Raw Roadmap Datasets
+### 1b. AgentBench Raw Sources
 
-These commands prepare sources for future agentic adapters. Raw setup success is
-not the same as runnable ACDAN evaluation.
+These commands prepare raw sources for General AgentBench-style trajectory
+self-choice. Raw setup success is not the same as a runnable score: you still
+need K candidate trajectories with `score`/`is_correct`, or an external
+evaluator command for the official harness.
 
 Dry run:
 
@@ -147,17 +149,17 @@ $PY scripts/setup_datasets.py --suite agentic_benchmarks --overwrite \
   --benchmarks browsecomp,webvoyager,swe_bench_verified,terminal_bench,mathhay,tau2_bench_data,tau2_bench_hud,mcp_bench
 ```
 
-Roadmap status:
+AgentBench status:
 
 | Domain | Dataset | Original | Setup key | Current repo status |
 |---|---:|---|---|---|
-| Search | BrowseComp | 1266 | `browsecomp` | task manifest + trajectory self-choice |
-| Search | WebVoyager | 643 | `webvoyager` | task manifest + external evaluator |
-| Coding | SWE-Bench Verified | 500 | `swe_bench_verified` | task manifest + external evaluator |
-| Coding | Terminal-Bench | 230 | `terminal_bench` | task manifest + external evaluator |
-| Reason | MathHay | 602 | `mathhay` | task manifest + trajectory self-choice |
-| Tool-Calling | Tau2-Bench | 278 | `tau2_bench_data`, `tau2_bench_hud` | task manifest + external evaluator |
-| Tool-Calling | MCP-Bench | 104 | `mcp_bench` | task manifest + external evaluator |
+| Search | BrowseComp | 1266 | `browsecomp` | task manifest ready; needs scored candidates/external eval |
+| Search | WebVoyager | 643 | `webvoyager` | task manifest ready; needs browser trajectories + scores |
+| Coding | SWE-Bench Verified | 500 | `swe_bench_verified` | task manifest ready; needs SWE harness scores |
+| Coding | Terminal-Bench | 230 | `terminal_bench` | raw only until manifest validates |
+| Reason | MathHay | 602 | `mathhay` | raw only until manifest validates |
+| Tool-Calling | Tau2-Bench | 278 | `tau2_bench_data`, `tau2_bench_hud` | task manifest ready; needs simulator scores |
+| Tool-Calling | MCP-Bench | 104 | `mcp_bench` | raw only until manifest validates |
 
 Before reporting final numbers, candidate trajectories must come from the
 appropriate agent environment and environment benchmarks must use official or
@@ -222,6 +224,9 @@ M=Qwen/Qwen2.5-7B-Instruct
 TAG=qwen7b
 ENCODER_ARGS="--encoder hash"
 LATENT_ARGS="--no-latent"
+# To enable vLLM hidden-state features and latent/TTT:
+# ENCODER_ARGS="--encoder vllm_hidden --encoder-pooling last"
+# LATENT_ARGS=""
 MONITOR_ARGS="--monitor --progress-every 25"
 mkdir -p results results/approval
 ```
@@ -421,7 +426,8 @@ tasks, consumes K candidate trajectories from an agent/executor, then uses ACDAN
 as the self-choice selector. It reports selected score, pass@K, oracle score,
 and verification gap.
 
-Prepare raw sources and sampled task manifests:
+Prepare raw sources and sampled task manifests for the currently validated
+AgentBench subset:
 
 ```bash
 $PY scripts/setup_datasets.py --suite agentic_benchmarks --overwrite \
@@ -430,13 +436,30 @@ $PY scripts/setup_datasets.py --suite agentic_benchmarks --overwrite \
 $PY experiments/prepare_agentbench.py --datasets browsecomp,webvoyager,swe_bench_verified,tau2_bench \
   --out-dir data/agentbench --seed 0
 
-# Archive-backed datasets use their raw extracted folders.
+# These four should validate before you spend GPU/API budget.
+$PY experiments/validate_agentbench.py \
+  --tasks data/agentbench/browsecomp_tasks.jsonl \
+          data/agentbench/webvoyager_tasks.jsonl \
+          data/agentbench/swe_bench_verified_tasks.jsonl \
+          data/agentbench/tau2_bench_tasks.jsonl
+```
+
+Archive-backed datasets are not automatic-paper-ready yet. Run these only after
+confirming the raw source path points to the intended benchmark split, then
+require validation before using them:
+
+```bash
 $PY experiments/prepare_agentbench.py --datasets terminal_bench \
   --out-dir data/agentbench --source-path data/raw/agentic_benchmarks/terminal_bench --seed 0
 $PY experiments/prepare_agentbench.py --datasets mathhay \
   --out-dir data/agentbench --source-path data/raw/agentic_benchmarks/mathhay --seed 0
 $PY experiments/prepare_agentbench.py --datasets mcp_bench \
   --out-dir data/agentbench --source-path data/raw/agentic_benchmarks/mcp_bench --seed 0
+
+$PY experiments/validate_agentbench.py \
+  --tasks data/agentbench/terminal_bench_tasks.jsonl \
+          data/agentbench/mathhay_tasks.jsonl \
+          data/agentbench/mcp_bench_tasks.jsonl
 ```
 
 Generate or import K candidate trajectories per task into this schema:
@@ -448,7 +471,7 @@ Generate or import K candidate trajectories per task into this schema:
     "dataset": "browsecomp",
     "domain": "search",
     "instruction": "...",
-    "evaluator": "semantic_qa",
+    "evaluator": "external_browsecomp",
     "gold": "..."
   },
   "candidates": [
@@ -468,7 +491,12 @@ If your agent/executor writes one prediction per line, group it with:
 $PY experiments/build_agentbench_candidates.py \
   --tasks data/agentbench/${DATASET}_tasks.jsonl \
   --predictions results/agentbench/${DATASET}_${TAG}_predictions.jsonl \
-  --out results/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl \
+  --out data/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl \
+  --min-candidates 8
+
+$PY experiments/validate_agentbench.py \
+  --tasks data/agentbench/${DATASET}_tasks.jsonl \
+  --candidates data/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl \
   --min-candidates 8
 ```
 
@@ -477,7 +505,7 @@ official harness, or pass an evaluator command. Run ACDAN self-choice:
 
 ```bash
 DATASET=browsecomp
-CAND=results/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl
+CAND=data/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl
 
 for METHOD in acdan bon asc sc cot; do
   $PY experiments/run_agentbench_selection.py --method $METHOD \
@@ -487,6 +515,37 @@ for METHOD in acdan bon asc sc cot; do
     --n 8 --seed 0 --save-per-task \
     --out results/agentbench/${DATASET}_${TAG}_${METHOD}.json
 done
+```
+
+Run the same comparison for every dataset that has a non-empty candidate file:
+
+```bash
+AGENTBENCH_DATASETS="browsecomp webvoyager swe_bench_verified tau2_bench"
+for DATASET in $AGENTBENCH_DATASETS; do
+  CAND=data/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl
+  $PY experiments/validate_agentbench.py \
+    --tasks data/agentbench/${DATASET}_tasks.jsonl \
+    --candidates $CAND \
+    --min-candidates 8
+
+  for METHOD in acdan bon asc sc cot; do
+    $PY experiments/run_agentbench_selection.py --method $METHOD \
+      --candidates-path $CAND \
+      --policy vllm --policy-model $M --prm llm \
+      $ENCODER_ARGS $LATENT_ARGS $MONITOR_ARGS \
+      --n 8 --seed 0 --save-per-task \
+      --out results/agentbench/${DATASET}_${TAG}_${METHOD}.json
+  done
+done
+```
+
+Equivalent matrix script:
+
+```bash
+DATASETS="browsecomp webvoyager swe_bench_verified tau2_bench" \
+TAG=qwen7b K=8 MODEL=$M \
+ENCODER_ARGS="--encoder hash" LATENT_ARGS="--no-latent" \
+experiments/run_agentbench_matrix.sh
 ```
 
 External evaluator examples:

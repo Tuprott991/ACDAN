@@ -48,7 +48,7 @@ DOMAINS = {
 
 HF_DATASETS = {
     "browsecomp": ("smolagents/browse_comp", "test"),
-    "webvoyager": ("agentorg/webvoyager", "test"),
+    "webvoyager": ("btrabucco/web-voyager", "test"),
     "swe_bench_verified": ("SWE-bench/SWE-bench_Verified", "test"),
     "tau2_bench": ("Genteki/tau2-bench", "train"),
 }
@@ -128,22 +128,25 @@ def _task_from_hf(dataset: str, row: dict[str, Any], i: int) -> AgentBenchTask:
             dataset=dataset,
             domain=DOMAINS[dataset],
             instruction=str(row["problem"]),
-            evaluator="semantic_qa",
+            evaluator="external_browsecomp",
             gold=str(row["answer"]),
             metadata={
+                "encrypted": True,
                 "problem_topic": row.get("problem_topic", ""),
                 "source": "smolagents/browse_comp",
             },
         )
     if dataset == "webvoyager":
-        text = str(row.get("text", row.get("instruction", row)))
+        task = str(row.get("task", row.get("text", row.get("instruction", ""))))
+        domain = str(row.get("domain", "")).strip()
+        text = f"{task}\nStart URL: {domain}" if domain else task
         return AgentBenchTask(
-            task_id=f"webvoyager-{i:05d}",
+            task_id=str(row.get("identifier", f"webvoyager-{i:05d}")),
             dataset=dataset,
             domain=DOMAINS[dataset],
             instruction=text,
             evaluator="external_webvoyager",
-            metadata={"source": "agentorg/webvoyager", "raw": row},
+            metadata={"source": "btrabucco/web-voyager", "start_url": domain, "raw": row},
         )
     if dataset == "swe_bench_verified":
         iid = str(row.get("instance_id", f"swe-{i:05d}"))
@@ -163,11 +166,21 @@ def _task_from_hf(dataset: str, row: dict[str, Any], i: int) -> AgentBenchTask:
         metadata = dict(row.get("metadata", {}) or {})
         args = dict(row.get("args", {}) or {})
         tid = str(row.get("id", metadata.get("task_id", args.get("task_id", f"tau2-{i:05d}"))))
+        description = str(metadata.get("description") or "").strip()
+        if not description:
+            domain = str(metadata.get("domain", args.get("domain", "unknown")))
+            task_id = str(metadata.get("task_id", args.get("task_id", tid)))
+            split = str(metadata.get("task_split", args.get("task_split", "unknown")))
+            description = (
+                f"Tau2 stateful {domain} task {task_id} from split {split}. "
+                "Run the user-simulator conversation and complete the requested workflow "
+                "according to the environment policy."
+            )
         return AgentBenchTask(
             task_id=tid,
             dataset=dataset,
             domain=DOMAINS[dataset],
-            instruction=str(row.get("scenario", metadata.get("description", ""))),
+            instruction=description,
             evaluator="external_tau2",
             metadata={"env": row.get("env", {}), "args": args, "metadata": metadata},
         )

@@ -16,6 +16,7 @@ from acdan.datasets.math_answer import answers_equivalent
 
 
 EXTERNAL_EVALUATORS = {
+    "external_browsecomp",
     "external_webvoyager",
     "external_swe_bench",
     "external_terminal_bench",
