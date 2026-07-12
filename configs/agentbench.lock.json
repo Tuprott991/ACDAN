@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "protocol": "general-agentbench-parallel-scaling",
+  "created_utc": "2026-07-12",
+  "general_agentbench": {
+    "url": "https://github.com/cxcscmu/General-AgentBench.git",
+    "commit": "35f5c027c31ddcb3366b28674c6cb2957460c0e2",
+    "task_root": "general_agent/data",
+    "runner": "general_agent/scripts/run_parallel_scaling.sh"
+  },
+  "webvoyager": {
+    "url": "https://github.com/MinorJerry/WebVoyager.git",
+    "commit": "5a7896738c10bfb8b9edccce6bb0e0411f8ae569",
+    "task_file": "data/WebVoyager_data.jsonl",
+    "runner": "run.py",
+    "evaluator": "evaluation/run_eval.sh"
+  },
+  "reference_upstreams": {
+    "swe_bench": {
+      "url": "https://github.com/SWE-bench/SWE-bench.git",
+      "commit": "f7bbbb2ccdf479001d6467c9e34af59e44a840f9"
+    },
+    "terminal_bench": {
+      "url": "https://github.com/harbor-framework/terminal-bench.git",
+      "commit": "d28711d0da2675d0bb1d56de45ae5df6082438a3"
+    },
+    "tau2_bench": {
+      "url": "https://github.com/sierra-research/tau2-bench.git",
+      "commit": "1901a301961cbbe3fd11f3e84a2a376530c759e3"
+    },
+    "mcp_bench": {
+      "url": "https://github.com/Accenture/mcp-bench.git",
+      "commit": "7a8eaeae83a842a2949080acc5473f65e1569daf"
+    },
+    "browsecomp_reference": {
+      "url": "https://github.com/openai/simple-evals.git",
+      "commit": "652c89d0ca9df547706735883097e9537d40dc47"
+    }
+  },
+  "datasets": {
+    "browsecomp": {
+      "upstream_benchmark": "search",
+      "task_file": "search_benchmark.json",
+      "expected_tasks": 124,
+      "evaluator": "external_browsecomp"
+    },
+    "mathhay": {
+      "upstream_benchmark": "mathhay",
+      "task_file": "mathhay_benchmark.json",
+      "expected_tasks": 75,
+      "evaluator": "external_mathhay"
+    },
+    "swe_bench_verified": {
+      "upstream_benchmark": "swebench",
+      "task_file": "swebench_test_50.json",
+      "expected_tasks": 50,
+      "evaluator": "external_swe_bench"
+    },
+    "terminal_bench": {
+      "upstream_benchmark": "terminalbench",
+      "task_file": "terminalbench_benchmark.json",
+      "expected_tasks": 80,
+      "evaluator": "external_terminal_bench"
+    },
+    "tau2_bench": {
+      "upstream_benchmark": "tau2bench",
+      "task_file": "tau2bench_benchmark.json",
+      "expected_tasks": 50,
+      "evaluator": "external_tau2"
+    },
+    "mcp_bench": {
+      "upstream_benchmark": "mcpbench",
+      "task_file": "mcpbench_benchmark.json",
+      "expected_tasks": 52,
+      "evaluator": "external_mcp_bench"
+    },
+    "webvoyager": {
+      "upstream_benchmark": "webvoyager",
+      "task_file": "data/WebVoyager_data.jsonl",
+      "expected_tasks": 643,
+      "paper_subset_tasks": 65,
+      "evaluator": "external_webvoyager"
+    }
+  }
+}

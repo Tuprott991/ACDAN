@@ -1,9 +1,4 @@
-"""Prepare General AgentBench-style task manifests.
-
-This writes unified task JSONL files. It does not generate trajectories; use an
-agent runner to produce K candidate trajectories per task, then evaluate
-self-choice with ``experiments/run_agentbench_selection.py``.
-"""
+"""Prepare score-blind task manifests from explicit official task files."""
 
 from __future__ import annotations
 
@@ -28,6 +23,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     ap.add_argument("--out-dir", default=str(ROOT / "data" / "agentbench"))
     ap.add_argument("--source-path", default=None, help="Local source for one archive-backed dataset.")
+    ap.add_argument(
+        "--source-revision",
+        default=None,
+        help="Pinned source git revision recorded in task provenance.",
+    )
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--hf-token", default=None)
@@ -48,6 +48,7 @@ def main(argv: list[str] | None = None) -> None:
             seed=args.seed,
             token=args.hf_token,
             overwrite=not args.no_overwrite,
+            source_revision=args.source_revision,
         )
         print(f"{dataset}: wrote {path}")
 

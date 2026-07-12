@@ -37,6 +37,7 @@ if str(SRC) not in sys.path:
 from acdan.agent import ACDANAgent
 from acdan.agentbench.adapters import AgentBenchTask
 from acdan.agentbench.evaluators import Candidate, CandidateEvaluator, EXTERNAL_EVALUATORS
+from acdan.agentbench.metrics import summarize_selection
 from acdan.baselines import (
     adaptive_self_consistency,
     best_of_n_prm,
@@ -121,7 +122,11 @@ def _preflight_evaluation(
 def _text_preview(text: str, limit: int, label: str) -> str:
     if limit <= 0 or len(text) <= limit:
         return text
-    return text[:limit].rstrip() + f"\n\n[truncated {label} for selector scoring]"
+    marker = f"\n\n[truncated middle of {label} for selector scoring]\n\n"
+    available = max(2, limit - len(marker))
+    head = available // 2
+    tail = available - head
+    return text[:head].rstrip() + marker + text[-tail:].lstrip()
 
 
 def _raw_task(
@@ -152,28 +157,46 @@ def _raw_task(
     )
 
 
-def _select(method: str, core, prm, reasoner, verifier, config, task, latent, n: int, asc_threshold: float):
+def _select(
+    method: str,
+    core,
+    prm,
+    reasoner,
+    verifier,
+    config,
+    task,
+    latent,
+    n: int,
+    asc_threshold: float,
+    seed: int,
+):
     if method == "acdan":
         agent = ACDANAgent(config, core, prm, reasoner, verifier, outcome_checker=lambda _t, _a: True)
         result = agent.run_task(task)
-        return [step.action_id for step in result.steps], dataclasses.asdict(result.metrics)
+        return (
+            [step.action_id for step in result.steps],
+            dataclasses.asdict(result.metrics),
+            float(result.verification.confidence),
+            bool(result.verification.abstained),
+        )
     if method == "cot":
         br = cot_greedy(core, task, latent)
     elif method == "sc":
-        br = self_consistency(core, task, latent, n=n)
+        br = self_consistency(core, task, latent, n=n, seed=seed)
     elif method == "asc":
-        br = adaptive_self_consistency(core, task, latent, n=n, threshold=asc_threshold)
+        br = adaptive_self_consistency(core, task, latent, n=n, threshold=asc_threshold, seed=seed)
     elif method == "bon":
-        br = best_of_n_prm(core, prm, task, latent, n=n)
+        br = best_of_n_prm(core, prm, task, latent, n=n, seed=seed)
     else:
         raise KeyError(method)
-    return list(br.actions), dict(br.cost)
+    return list(br.actions), dict(br.cost), float(br.confidence), bool(br.abstained)
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     candidate_rows = _load_candidate_rows(args.candidates_path, args.limit)
     external_commands = _parse_external(args.evaluator_command)
-    _preflight_evaluation(candidate_rows, external_commands, args.allow_unevaluated)
+    if not args.selection_only:
+        _preflight_evaluation(candidate_rows, external_commands, args.allow_unevaluated)
 
     config = ACDANConfig(name=args.method, seed=args.seed)
     if args.no_latent:
@@ -223,35 +246,48 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if ab.latent_reasoning
             else reasoner.passthrough(task.prompt_features)
         )
-        actions, cost = _select(
+        task_started = time.perf_counter()
+        prompt_tokens_before = int(getattr(core, "n_prompt_tokens", 0))
+        actions, cost, confidence, abstained = _select(
             args.method, core, prm, reasoner, verifier, config, task,
-            trace.final_state, args.n, args.asc_threshold,
+            trace.final_state, args.n, args.asc_threshold, args.seed,
         )
+        selection_wall_s = time.perf_counter() - task_started
+        selection_prompt_tokens = int(getattr(core, "n_prompt_tokens", 0)) - prompt_tokens_before
         selected = int(actions[0]) if actions else 0
         selected = max(0, min(selected, len(candidates) - 1))
-        evals = [evaluator.evaluate(task_spec, c) for c in candidates]
-        selected_eval = evals[selected]
-        oracle = max(float(e["score"]) for e in evals)
-        pass_at_k = any(bool(e["correct"]) for e in evals)
-        rows.append({
+        result_row = {
             "task_id": task_spec.task_id,
             "dataset": task_spec.dataset,
             "domain": task_spec.domain,
             "selected": selected,
             "selected_candidate_id": candidates[selected].candidate_id,
-            "selected_score": float(selected_eval["score"]),
-            "selected_correct": bool(selected_eval["correct"]),
-            "oracle_score": oracle,
-            "pass_at_k": bool(pass_at_k),
+            "confidence": confidence,
+            "raw_confidence": confidence,
+            "abstained": abstained,
             "n_candidates": len(candidates),
+            "selection_prompt_tokens": selection_prompt_tokens,
+            "selection_wall_s": selection_wall_s,
             "cost": cost,
-        })
-        if args.monitor and (idx == 1 or idx % max(1, args.progress_every) == 0):
+        }
+        if not args.selection_only:
+            evals = [evaluator.evaluate(task_spec, c) for c in candidates]
+            selected_eval = evals[selected]
+            result_row.update({
+                "selected_score": float(selected_eval["score"]),
+                "selected_correct": bool(selected_eval["correct"]),
+                "oracle_score": max(float(e["score"]) for e in evals),
+                "pass_at_k": any(bool(e["correct"]) for e in evals),
+            })
+        rows.append(result_row)
+        if args.monitor and not args.selection_only and (idx == 1 or idx % max(1, args.progress_every) == 0):
             acc = np.mean([r["selected_correct"] for r in rows])
             print(f"[agentbench] {idx} tasks selected_acc={acc:.3f}")
+        elif args.monitor and (idx == 1 or idx % max(1, args.progress_every) == 0):
+            print(f"[agentbench] {idx} tasks selected (blind mode)")
 
     n = len(rows)
-    summary = {
+    summary: dict[str, Any] = {
         "method": args.method,
         "policy": args.policy,
         "policy_model": args.policy_model,
@@ -259,19 +295,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "encoder": args.encoder,
         "ablation": dataclasses.asdict(config.ablation),
         "n_tasks": n,
-        "selected_accuracy": float(np.mean([r["selected_correct"] for r in rows])) if n else 0.0,
-        "selected_score": float(np.mean([r["selected_score"] for r in rows])) if n else 0.0,
-        "oracle_score": float(np.mean([r["oracle_score"] for r in rows])) if n else 0.0,
-        "pass_at_k": float(np.mean([r["pass_at_k"] for r in rows])) if n else 0.0,
-        "verification_gap": (
-            float(np.mean([r["pass_at_k"] for r in rows]))
-            - float(np.mean([r["selected_correct"] for r in rows]))
-            if n else 0.0
-        ),
+        "selection_only": bool(args.selection_only),
         "mean_candidates": float(np.mean([r["n_candidates"] for r in rows])) if n else 0.0,
+        "mean_selection_prompt_tokens": float(np.mean([r["selection_prompt_tokens"] for r in rows])) if n else 0.0,
+        "total_selection_prompt_tokens": int(sum(r["selection_prompt_tokens"] for r in rows)),
+        "mean_selection_latency_s": float(np.mean([r["selection_wall_s"] for r in rows])) if n else 0.0,
+        "mean_samples": float(np.mean([float(r["cost"].get("samples", 1.0)) for r in rows])) if n else 0.0,
+        "mean_verified_candidates": float(np.mean([
+            float(r["cost"].get("verified_candidates", 0.0)) for r in rows
+        ])) if n else 0.0,
         "wall_s": time.perf_counter() - t0,
     }
-    out = {"summary": summary, "per_task": rows if args.save_per_task else []}
+    if not args.selection_only:
+        summary.update(summarize_selection(rows))
+    out = {"summary": summary, "per_task": rows if (args.save_per_task or args.selection_only) else []}
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
         Path(args.out).write_text(json.dumps(out, indent=2), encoding="utf-8")
@@ -322,6 +359,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--asc-threshold", type=float, default=0.70)
     p.add_argument("--evaluator-command", action="append", default=[])
     p.add_argument("--allow-unevaluated", action="store_true")
+    p.add_argument(
+        "--selection-only",
+        action="store_true",
+        help="Blindly select and save candidate IDs without loading or invoking official scores.",
+    )
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--out", default=None)
     p.add_argument("--save-per-task", action="store_true")

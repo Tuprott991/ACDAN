@@ -25,13 +25,21 @@ from acdan.types import Task, softmax
 class BaselineResult:
     actions: List[int]
     cost: Dict[str, float] = field(default_factory=dict)
+    confidence: float = 0.5
+    abstained: bool = False
 
 
 def cot_greedy(core: CoreModel, task: Task, latent: np.ndarray) -> BaselineResult:
     """Chain-of-thought analogue: one pass, greedy argmax of the prior."""
     prior = core.prior_logits(task, latent)
     actions = [int(np.argmax(prior[h])) for h in range(prior.shape[0])]
-    return BaselineResult(actions, {"policy_passes": 1, "prm_passes": 0, "samples": 1})
+    probs = softmax(prior, axis=1)
+    confidence = float(np.mean([probs[h, actions[h]] for h in range(len(actions))]))
+    return BaselineResult(
+        actions,
+        {"policy_passes": 1, "prm_passes": 0, "samples": 1},
+        confidence=confidence,
+    )
 
 
 def self_consistency(core: CoreModel, task: Task, latent: np.ndarray,
@@ -47,7 +55,12 @@ def self_consistency(core: CoreModel, task: Task, latent: np.ndarray,
             a = int(rng.choice(V, p=probs[h]))
             votes[h, a] += 1
     actions = [int(np.argmax(votes[h])) for h in range(H)]
-    return BaselineResult(actions, {"policy_passes": 1, "prm_passes": 0, "samples": n})
+    confidence = float(np.mean([votes[h, actions[h]] / max(1, n) for h in range(H)]))
+    return BaselineResult(
+        actions,
+        {"policy_passes": 1, "prm_passes": 0, "samples": n},
+        confidence=confidence,
+    )
 
 
 def _candidate_sample_trace(task: Task) -> List[int]:
@@ -122,6 +135,9 @@ def adaptive_self_consistency(
                 break
 
     actions = [int(np.argmax(votes[h])) if votes[h].sum() else 0 for h in range(H)]
+    confidence = float(np.mean([
+        votes[h, actions[h]] / max(1.0, votes[h].sum()) for h in range(H)
+    ]))
     return BaselineResult(
         actions,
         {
@@ -130,6 +146,7 @@ def adaptive_self_consistency(
             "samples": float(used or 1),
             "stop_threshold": float(threshold),
         },
+        confidence=confidence,
     )
 
 
@@ -151,13 +168,15 @@ def best_of_n_prm(core: CoreModel, prm: ProcessRewardModel, task: Task,
         score = float(sum(R[h, plan[h]] for h in range(H)))
         if score > best_score:
             best_score, best_actions = score, plan
+    confidence = float(np.clip(best_score / max(1, H), 0.0, 1.0))
     return BaselineResult(best_actions or [0] * H,
                           {
                               "policy_passes": 1,
                               "prm_passes": 1,
                               "samples": n,
                               "verified_candidates": H * V,
-                          })
+                          },
+                          confidence=confidence)
 
 
 # ---------------------------------------------------------------------------

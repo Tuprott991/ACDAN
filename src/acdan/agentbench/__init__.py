@@ -10,6 +10,7 @@ from acdan.agentbench.adapters import (
     write_tasks,
 )
 from acdan.agentbench.evaluators import Candidate, CandidateEvaluator
+from acdan.agentbench.artifacts import OfficialScore, TrajectoryArtifact, TrajectoryCost
 
 __all__ = [
     "AGENTBENCH_DATASETS",
@@ -17,6 +18,9 @@ __all__ = [
     "AgentBenchTask",
     "Candidate",
     "CandidateEvaluator",
+    "OfficialScore",
+    "TrajectoryArtifact",
+    "TrajectoryCost",
     "prepare_dataset",
     "prepare_many",
     "read_tasks",

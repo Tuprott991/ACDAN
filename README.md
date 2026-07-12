@@ -199,7 +199,7 @@ bash scripts/reproduce.sh        # Windows: powershell -File scripts/reproduce.p
 
 ```
 === ACDAN demo | config=default | enabled=[...] disabled=[] ===
-task         : math-000  (family=math, difficulty=0.64)
+task         : math-000  (family=math, difficulty=0.64) 
 optimal plan : ['check', 'read', 'decompose', 'read', 'decompose']
 DTO steps    : 40
 DTO objective: -0.12xx -> -0.27xx (lower is better)
@@ -304,20 +304,18 @@ The architecture programs against small interfaces and lazy backends:
 
 Current local adapters cover synthetic tasks, GSM8K/MATH-style answer selection,
 AIME/Omni-MATH-style candidate selection, BFCL/tool-name selection, and GAIA-like
-open-ended data. Tau2/tau-bench data is only snapshotted by
-[`scripts/setup_datasets.py`](scripts/setup_datasets.py); there is currently no
-`tau`, `tau2`, or `taubench` dataset adapter in
-[`build_dataset`](src/acdan/datasets/base.py), and no stateful executor/judge in
-the runner. Do not report tau-bench/tau2 as an ACDAN result until that adapter
-and execution layer are wired.
+open-ended data. Stateful AgentBench execution is deliberately delegated to the
+pinned native General AgentBench and WebVoyager harnesses; ACDAN imports their K
+trajectories and immutable official scores for blind post-hoc selection.
 
 ### Agentic benchmark roadmap
 
-Raw setup for these datasets is available with:
+Pinned official setup is available with:
 
 ```bash
-python scripts/setup_datasets.py --suite agentic_benchmarks --dry-run
-python scripts/setup_datasets.py --suite agentic_benchmarks --overwrite
+python scripts/setup_agentbench_official.py --dry-run
+python scripts/setup_agentbench_official.py
+python experiments/validate_agentbench.py --tasks-dir data/agentbench --require-provenance
 ```
 
 These are useful external datasets for the AgentBench-style trajectory
@@ -325,18 +323,19 @@ self-choice path:
 
 | Domain | Dataset | Original size | Setup key | Current status |
 |---|---|---:|---|---|
-| Search | BrowseComp | 1266 | `browsecomp` | task manifest + trajectory self-choice |
-| Search | WebVoyager | 643 | `webvoyager` | task manifest + external evaluator |
-| Coding | SWE-Bench Verified | 500 | `swe_bench_verified` | task manifest + external evaluator |
-| Coding | Terminal-Bench | 230 | `terminal_bench` | task manifest + external evaluator |
-| Reason | MathHay | 602 | `mathhay` | task manifest + trajectory self-choice |
-| Tool-Calling | Tau2-Bench | 278 | `tau2_bench_data`, `tau2_bench_hud` | task manifest + external evaluator |
-| Tool-Calling | MCP-Bench | 104 | `mcp_bench` | task manifest + external evaluator |
+| Search | BrowseComp | 124 | `browsecomp` | pinned unified executor + native score import |
+| Search | WebVoyager | 65 | `webvoyager` | pinned Selenium runner + multimodal score import |
+| Coding | SWE-Bench Verified | 50 | `swe_bench_verified` | pinned Docker executor + test score import |
+| Coding | Terminal-Bench | 80 | `terminal_bench` | pinned container executor + test score import |
+| Reason | MathHay | 75 | `mathhay` | pinned long-context executor + native score import |
+| Tool-Calling | Tau2-Bench | 50 | `tau2_bench` | pinned stateful simulator + reward import |
+| Tool-Calling | MCP-Bench | 52 | `mcp_bench` | pinned MCP servers + native judge import |
 
-Recommended claim boundary: report these only from candidate trajectories
-generated in the correct agent environment, with official evaluator outputs or a
-configured external evaluator command. Selector-only `*_proxy` datasets are for
-debugging DTO behavior, not General AgentBench claims.
+The reportable path separates score-blind candidates, blind selector outputs,
+and official scores so outcomes cannot leak into ACDAN. See
+[`experiments/PLAN.md`](experiments/PLAN.md) Section 3c for copy-ready VM
+commands. Selector-only `*_proxy` and `--allow-unevaluated` runs remain smoke
+tests, not General AgentBench claims.
 
 A complete custom-backend template is in
 [`examples/custom_backend.py`](examples/custom_backend.py).

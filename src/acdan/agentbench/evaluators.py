@@ -20,6 +20,7 @@ EXTERNAL_EVALUATORS = {
     "external_webvoyager",
     "external_swe_bench",
     "external_terminal_bench",
+    "external_mathhay",
     "external_tau2",
     "external_mcp_bench",
 }

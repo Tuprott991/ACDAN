@@ -1,19 +1,19 @@
-"""Task adapters for General AgentBench-style evaluation.
+"""Explicit task adapters for the pinned General AgentBench protocol.
 
-These adapters prepare *tasks*, not candidate answers. The paper-style protocol
-requires an agent to generate trajectories in the appropriate environment, then
-the selection/evaluation layer can measure pass@K and self-choice.
+The official repositories contain many JSON/YAML configuration files that are
+not tasks. This module deliberately opens only known task files and never scans
+an archive recursively.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import random
 from dataclasses import asdict, dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Sequence
-
-import yaml
 
 
 AGENTBENCH_DATASETS = (
@@ -53,6 +53,25 @@ HF_DATASETS = {
     "tau2_bench": ("Genteki/tau2-bench", "train"),
 }
 
+GENERAL_AGENT_TASK_FILES = {
+    "browsecomp": "general_agent/data/search_benchmark.json",
+    "swe_bench_verified": "general_agent/data/swebench_test_50.json",
+    "terminal_bench": "general_agent/data/terminalbench_benchmark.json",
+    "mathhay": "general_agent/data/mathhay_benchmark.json",
+    "tau2_bench": "general_agent/data/tau2bench_benchmark.json",
+    "mcp_bench": "general_agent/data/mcpbench_benchmark.json",
+}
+
+EXTERNAL_EVALUATOR = {
+    "browsecomp": "external_browsecomp",
+    "webvoyager": "external_webvoyager",
+    "swe_bench_verified": "external_swe_bench",
+    "terminal_bench": "external_terminal_bench",
+    "mathhay": "external_mathhay",
+    "tau2_bench": "external_tau2",
+    "mcp_bench": "external_mcp_bench",
+}
+
 
 @dataclass
 class AgentBenchTask:
@@ -83,21 +102,21 @@ def write_tasks(path: str | Path, tasks: Iterable[AgentBenchTask], overwrite: bo
 
 def read_tasks(path: str | Path) -> list[AgentBenchTask]:
     tasks: list[AgentBenchTask] = []
-
     with Path(path).open("r", encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
+        for line_no, line in enumerate(fh, start=1):
+            if not line.strip():
                 continue
-            d = json.loads(line)
+            value = json.loads(line)
+            if not isinstance(value, dict):
+                raise ValueError(f"{path}:{line_no}: expected a JSON object")
             tasks.append(AgentBenchTask(
-                task_id=str(d["task_id"]),
-                dataset=str(d["dataset"]),
-                domain=str(d.get("domain", DOMAINS.get(str(d["dataset"]), "unknown"))),
-                instruction=str(d["instruction"]),
-                evaluator=str(d.get("evaluator", "external")),
-                gold=d.get("gold"),
-                metadata=dict(d.get("metadata", {}) or {}),
+                task_id=str(value["task_id"]),
+                dataset=str(value["dataset"]),
+                domain=str(value.get("domain", DOMAINS.get(str(value["dataset"]), "unknown"))),
+                instruction=str(value["instruction"]),
+                evaluator=str(value.get("evaluator", "external")),
+                gold=value.get("gold"),
+                metadata=dict(value.get("metadata", {}) or {}),
             ))
     return tasks
 
@@ -107,8 +126,8 @@ def _sample(rows: Sequence[Any], limit: int | None, seed: int) -> list[Any]:
     if limit is None or limit >= len(rows):
         return rows
     rng = random.Random(seed)
-    idxs = sorted(rng.sample(range(len(rows)), limit))
-    return [rows[i] for i in idxs]
+    indices = sorted(rng.sample(range(len(rows)), limit))
+    return [rows[i] for i in indices]
 
 
 def _load_hf_dataset(name: str, split: str, token: str | None):
@@ -121,143 +140,226 @@ def _load_hf_dataset(name: str, split: str, token: str | None):
     return load_dataset(name, split=split, token=token)
 
 
-def _task_from_hf(dataset: str, row: dict[str, Any], i: int) -> AgentBenchTask:
+@lru_cache(maxsize=32)
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _read_exact_rows(path: Path) -> list[dict[str, Any]]:
+    if path.suffix == ".jsonl":
+        values = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    elif path.suffix == ".json":
+        values = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(values, dict):
+            values = values.get("tasks", values.get("data", [values]))
+    else:
+        raise ValueError(f"official task source must be .json or .jsonl: {path}")
+    if not isinstance(values, list) or not all(isinstance(row, dict) for row in values):
+        raise ValueError(f"expected a list of task objects in {path}")
+    return list(values)
+
+
+def _resolve_source(dataset: str, source_path: str | Path) -> Path:
+    source = Path(source_path)
+    if source.is_file():
+        return source
+    candidates: list[Path] = []
+    if dataset in GENERAL_AGENT_TASK_FILES:
+        candidates.extend([
+            source / GENERAL_AGENT_TASK_FILES[dataset],
+            source / Path(GENERAL_AGENT_TASK_FILES[dataset]).name,
+        ])
+    if dataset == "webvoyager":
+        candidates.extend([
+            source / "data" / "WebVoyager_data.jsonl",
+            source / "WebVoyager_data.jsonl",
+        ])
+    # Explicit legacy fixture name; unlike the old adapter this never scans recursively.
+    candidates.extend([source / f"{dataset}_tasks.jsonl", source / "tasks.jsonl"])
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    checked = ", ".join(str(path) for path in candidates)
+    raise RuntimeError(f"no official task file found for {dataset}; checked: {checked}")
+
+
+def _provenance(path: Path, revision: str | None, original_id: str) -> dict[str, Any]:
+    return {
+        "source_file": str(path),
+        "source_sha256": _sha256(path),
+        "source_revision": revision or "unversioned",
+        "original_task_id": original_id,
+    }
+
+
+def _from_general_agent(
+    dataset: str,
+    row: dict[str, Any],
+    index: int,
+    source: Path,
+    revision: str | None,
+) -> AgentBenchTask:
+    task = dict(row.get("task", {}) or {})
+    evaluator = EXTERNAL_EVALUATOR[dataset]
+    metadata = _provenance(source, revision, "")
+    metadata.update({
+        "source_file": GENERAL_AGENT_TASK_FILES[dataset],
+        "upstream_benchmark": row.get("benchmark"),
+        "upstream_dataset": row.get("dataset"),
+        "upstream_domain": row.get("domain"),
+    })
+
+    if dataset == "browsecomp":
+        original = str(row["id"])
+        task_id = f"browsecomp_{original}"
+        instruction = str(row["question"])
+    elif dataset == "mcp_bench":
+        original = str(task.get("id", index))
+        task_id = f"mcpbench_{index}"
+        instruction = str(task.get("fuzzy_description") or task.get("task_description") or "")
+        metadata.update({
+            "servers": task.get("servers", []),
+            "combination_type": task.get("combination_type"),
+        })
+    elif dataset == "tau2_bench":
+        original = str(task.get("id", index))
+        upstream_domain = str(row.get("domain", row.get("dataset", "unknown")))
+        task_id = f"tau2:{upstream_domain}:{original}"
+        description = task.get("description", {}) or {}
+        scenario = task.get("user_scenario", {}) or {}
+        instructions = scenario.get("instructions", {}) or {}
+        instruction = str(
+            description.get("purpose")
+            or instructions.get("reason_for_call")
+            or task.get("instruction")
+            or original
+        )
+        metadata.update({"tau2_domain": upstream_domain, "upstream_task": task})
+    else:
+        original = str(task.get("id", task.get("instance_id", index)))
+        task_id = original
+        instruction = str(task.get("question") or task.get("instruction") or task.get("task_description") or "")
+        if dataset == "swe_bench_verified":
+            metadata.update({"repo": task.get("repo"), "runtime": task.get("runtime", {})})
+        elif dataset == "terminal_bench":
+            metadata.update({"runtime": task.get("runtime", {}), "category": task.get("category")})
+        elif dataset == "mathhay":
+            metadata.update({"task_type": task.get("task_type"), "document_ids": task.get("document_ids", [])})
+
+    metadata["original_task_id"] = original
+    if not instruction.strip():
+        raise ValueError(f"{source}: task {original} has no instruction")
+    return AgentBenchTask(
+        task_id=task_id,
+        dataset=dataset,
+        domain=DOMAINS[dataset],
+        instruction=instruction,
+        evaluator=evaluator,
+        gold=None,
+        metadata=metadata,
+    )
+
+
+def _task_from_hf(dataset: str, row: dict[str, Any], index: int) -> AgentBenchTask:
     if dataset == "browsecomp":
         return AgentBenchTask(
-            task_id=f"browsecomp-{i:05d}",
+            task_id=f"browsecomp_{index + 1}",
             dataset=dataset,
             domain=DOMAINS[dataset],
             instruction=str(row["problem"]),
-            evaluator="external_browsecomp",
-            gold=str(row["answer"]),
-            metadata={
-                "encrypted": True,
-                "problem_topic": row.get("problem_topic", ""),
-                "source": "smolagents/browse_comp",
-            },
+            evaluator=EXTERNAL_EVALUATOR[dataset],
+            metadata={"encrypted": True, "source": "smolagents/browse_comp", "original_task_id": index},
         )
     if dataset == "webvoyager":
         task = str(row.get("task", row.get("text", row.get("instruction", ""))))
-        domain = str(row.get("domain", "")).strip()
-        text = f"{task}\nStart URL: {domain}" if domain else task
+        start_url = str(row.get("domain", row.get("website", ""))).strip()
+        task_id = str(row.get("identifier", row.get("id", f"webvoyager-{index:05d}")))
         return AgentBenchTask(
-            task_id=str(row.get("identifier", f"webvoyager-{i:05d}")),
+            task_id=task_id,
             dataset=dataset,
             domain=DOMAINS[dataset],
-            instruction=text,
-            evaluator="external_webvoyager",
-            metadata={"source": "btrabucco/web-voyager", "start_url": domain, "raw": row},
+            instruction=f"{task}\nStart URL: {start_url}" if start_url else task,
+            evaluator=EXTERNAL_EVALUATOR[dataset],
+            metadata={"source": "btrabucco/web-voyager", "start_url": start_url, "original_task_id": task_id},
         )
     if dataset == "swe_bench_verified":
-        iid = str(row.get("instance_id", f"swe-{i:05d}"))
+        task_id = str(row.get("instance_id", f"swe-{index:05d}"))
         return AgentBenchTask(
-            task_id=iid,
+            task_id=task_id,
             dataset=dataset,
             domain=DOMAINS[dataset],
             instruction=str(row.get("problem_statement", "")),
-            evaluator="external_swe_bench",
-            gold=str(row.get("patch", "")),
-            metadata={k: row.get(k) for k in (
-                "repo", "base_commit", "test_patch", "hints_text", "version",
-                "FAIL_TO_PASS", "PASS_TO_PASS", "environment_setup_commit", "difficulty",
-            )},
+            evaluator=EXTERNAL_EVALUATOR[dataset],
+            metadata={
+                "original_task_id": task_id,
+                **{key: row.get(key) for key in (
+                    "repo", "base_commit", "test_patch", "hints_text", "version",
+                    "FAIL_TO_PASS", "PASS_TO_PASS", "environment_setup_commit", "difficulty",
+                )},
+            },
         )
     if dataset == "tau2_bench":
         metadata = dict(row.get("metadata", {}) or {})
         args = dict(row.get("args", {}) or {})
-        tid = str(row.get("id", metadata.get("task_id", args.get("task_id", f"tau2-{i:05d}"))))
-        description = str(metadata.get("description") or "").strip()
-        if not description:
-            domain = str(metadata.get("domain", args.get("domain", "unknown")))
-            task_id = str(metadata.get("task_id", args.get("task_id", tid)))
-            split = str(metadata.get("task_split", args.get("task_split", "unknown")))
-            description = (
-                f"Tau2 stateful {domain} task {task_id} from split {split}. "
-                "Run the user-simulator conversation and complete the requested workflow "
-                "according to the environment policy."
-            )
+        original = str(row.get("id", metadata.get("task_id", args.get("task_id", index))))
+        domain = str(metadata.get("domain", args.get("domain", "unknown")))
+        description = str(metadata.get("description") or f"Tau2 {domain} task {original}")
         return AgentBenchTask(
-            task_id=tid,
+            task_id=f"tau2:{domain}:{original}",
             dataset=dataset,
             domain=DOMAINS[dataset],
             instruction=description,
-            evaluator="external_tau2",
-            metadata={"env": row.get("env", {}), "args": args, "metadata": metadata},
+            evaluator=EXTERNAL_EVALUATOR[dataset],
+            metadata={"env": row.get("env", {}), "args": args, "metadata": metadata, "original_task_id": original},
         )
     raise KeyError(dataset)
 
 
-def _iter_jsonish(path: Path) -> Iterable[dict[str, Any]]:
-    if path.is_file():
-        files = [path]
-    else:
-        files = []
-        for pattern in ("*.jsonl", "*.json", "*.yaml", "*.yml"):
-            files.extend(path.rglob(pattern))
-    for file in sorted(files):
-        try:
-            if file.suffix == ".jsonl":
-                for line in file.read_text(encoding="utf-8").splitlines():
-                    if line.strip():
-                        value = json.loads(line)
-                        if isinstance(value, dict):
-                            yield value
-            elif file.suffix == ".json":
-                value = json.loads(file.read_text(encoding="utf-8"))
-                if isinstance(value, list):
-                    for item in value:
-                        if isinstance(item, dict):
-                            yield item
-                elif isinstance(value, dict):
-                    yield value
-            elif file.suffix in {".yaml", ".yml"}:
-                value = yaml.safe_load(file.read_text(encoding="utf-8"))
-                if isinstance(value, list):
-                    for item in value:
-                        if isinstance(item, dict):
-                            yield item
-                elif isinstance(value, dict):
-                    yield value
-        except (UnicodeDecodeError, json.JSONDecodeError, yaml.YAMLError):
-            continue
-
-
-def _first_text(row: dict[str, Any], keys: Sequence[str]) -> str:
-    for key in keys:
-        value = row.get(key)
-        if value is not None and str(value).strip():
-            return str(value)
-    for value in row.values():
-        if isinstance(value, str) and value.strip():
-            return value
-    return json.dumps(row, ensure_ascii=False)[:4000]
-
-
-def _task_from_generic(dataset: str, row: dict[str, Any], i: int) -> AgentBenchTask:
-    tid = str(row.get("task_id", row.get("id", row.get("instance_id", f"{dataset}-{i:05d}"))))
-    if dataset == "mathhay":
-        gold = row.get("answer", row.get("gold", row.get("final_answer")))
+def _task_from_explicit_file(
+    dataset: str,
+    row: dict[str, Any],
+    index: int,
+    source: Path,
+    revision: str | None,
+) -> AgentBenchTask:
+    if "benchmark" in row and dataset != "webvoyager":
+        return _from_general_agent(dataset, row, index, source, revision)
+    if dataset == "webvoyager":
+        task = str(row.get("ques", row.get("task", row.get("instruction", row.get("text", "")))))
+        if not task.strip():
+            task = str(row.get("text", ""))
+        original = str(row.get("id", row.get("identifier", f"webvoyager-{index:05d}")))
+        start_url = str(row.get("web", row.get("domain", row.get("start_url", ""))))
         return AgentBenchTask(
-            task_id=tid,
+            task_id=original,
             dataset=dataset,
             domain=DOMAINS[dataset],
-            instruction=_first_text(row, ("question", "problem", "prompt", "instruction")),
-            evaluator="semantic_qa",
-            gold=gold,
-            metadata={"raw": row},
+            instruction=f"{task}\nStart URL: {start_url}" if start_url else task,
+            evaluator=EXTERNAL_EVALUATOR[dataset],
+            metadata={
+                **_provenance(source, revision, original),
+                "source_file": "data/WebVoyager_data.jsonl",
+                "start_url": start_url,
+            },
         )
-    evaluator = {
-        "terminal_bench": "external_terminal_bench",
-        "mcp_bench": "external_mcp_bench",
-    }[dataset]
+    # Minimal explicit fixture compatibility, useful for local adapter tests.
+    original = str(row.get("task_id", row.get("id", row.get("instance_id", index))))
+    instruction = str(row.get("question", row.get("instruction", row.get("problem", ""))))
+    if not instruction:
+        raise ValueError(f"{source}: row {index + 1} does not match the {dataset} task schema")
+    evaluator = "semantic_qa" if dataset == "mathhay" and row.get("answer") is not None else EXTERNAL_EVALUATOR[dataset]
     return AgentBenchTask(
-        task_id=tid,
+        task_id=original,
         dataset=dataset,
         domain=DOMAINS[dataset],
-        instruction=_first_text(row, ("instruction", "task", "prompt", "description", "question")),
+        instruction=instruction,
         evaluator=evaluator,
-        gold=row.get("answer", row.get("gold")),
-        metadata={"raw": row},
+        gold=row.get("answer") if evaluator == "semantic_qa" else None,
+        metadata=_provenance(source, revision, original),
     )
 
 
@@ -270,35 +372,37 @@ def prepare_dataset(
     seed: int = 0,
     token: str | None = None,
     overwrite: bool = True,
+    source_revision: str | None = None,
 ) -> Path:
     if dataset not in AGENTBENCH_DATASETS:
         raise KeyError(f"unknown AgentBench dataset '{dataset}'")
     out_dir = Path(out_dir)
     limit = PAPER_SAMPLE_SIZES.get(dataset) if limit is None else limit
-    if dataset in HF_DATASETS:
+    if source_path is not None:
+        source = _resolve_source(dataset, source_path)
+        rows = _read_exact_rows(source)
+        selected = rows if limit is None or limit >= len(rows) else rows[:limit]
+        tasks = [
+            _task_from_explicit_file(dataset, row, index, source, source_revision)
+            for index, row in enumerate(selected)
+        ]
+    elif dataset in HF_DATASETS:
         name, split = HF_DATASETS[dataset]
         rows = list(_load_hf_dataset(name, split, token))
-        tasks = [_task_from_hf(dataset, row, i) for i, row in enumerate(_sample(rows, limit, seed))]
+        tasks = [_task_from_hf(dataset, row, index) for index, row in enumerate(_sample(rows, limit, seed))]
     else:
-        if source_path is None:
-            source_path = out_dir.parent / "raw" / "agentic_benchmarks" / dataset
-        rows = list(_iter_jsonish(Path(source_path)))
-        if not rows:
-            raise RuntimeError(
-                f"no parseable JSON/YAML tasks found for {dataset} under {source_path}"
-            )
+        default_source = out_dir.parent / "external" / "General-AgentBench"
+        source = _resolve_source(dataset, default_source)
+        rows = _read_exact_rows(source)
+        selected = rows if limit is None or limit >= len(rows) else rows[:limit]
         tasks = [
-            _task_from_generic(dataset, row, i)
-            for i, row in enumerate(_sample(rows, limit, seed))
+            _task_from_explicit_file(dataset, row, index, source, source_revision)
+            for index, row in enumerate(selected)
         ]
     path = out_dir / f"{dataset}_tasks.jsonl"
     write_tasks(path, tasks, overwrite=overwrite)
     return path
 
 
-def prepare_many(
-    datasets: Sequence[str],
-    out_dir: str | Path,
-    **kwargs: Any,
-) -> dict[str, str]:
+def prepare_many(datasets: Sequence[str], out_dir: str | Path, **kwargs: Any) -> dict[str, str]:
     return {dataset: str(prepare_dataset(dataset, out_dir, **kwargs)) for dataset in datasets}

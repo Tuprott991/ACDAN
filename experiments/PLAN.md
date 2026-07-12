@@ -108,7 +108,7 @@ Expected primary files:
 | Reason | AIME 2025 | `--suite math` | `data/aime2025.jsonl` | runnable after candidate generation |
 | Reason | Omni-MATH | `--suite math` | `data/omni_math.jsonl` | runnable after candidate generation |
 | Tool-Calling | BFCL | `--suite bfcl` | `data/bfcl_full.jsonl`, `data/bfcl_dev.jsonl`, `data/bfcl_test.jsonl` | runnable as tool-name selection |
-| Tool-Calling | Tau2 raw | `--suite agentic_raw` | `data/raw/agentic_benchmarks/tau2_bench_*` | raw only; no runner adapter yet |
+| Tool-Calling | Tau2 raw | `--suite agentic_raw` | `data/raw/agentic_benchmarks/tau2_bench_*` | r  aw only; no runner adapter yet |
 
 Sanity checks:
 
@@ -122,48 +122,80 @@ BFCL caveat: the current adapter preserves `gold_calls`, but the runner selects
 tool names, not full function-call argument ASTs. Final BFCL claims should still
 be checked against the official AST/executable evaluation when implemented.
 
-### 1b. AgentBench Raw Sources
+### 1b. Official AgentBench Sources
 
-These commands prepare raw sources for General AgentBench-style trajectory
-self-choice. Raw setup success is not the same as a runnable score: you still
-need K candidate trajectories with `score`/`is_correct`, or an external
-evaluator command for the official harness.
-
-Dry run:
+Do not use `scripts/setup_datasets.py --suite agentic_benchmarks` for paper
+results. That command is only a raw-source roadmap downloader. Reportable runs
+use the pinned commits in `configs/agentbench.lock.json` and the official
+General AgentBench execution layer.
 
 ```bash
-$PY scripts/setup_datasets.py --suite agentic_benchmarks --dry-run \
-  --out-dir data/roadmap_dryrun
+PY=.venv/bin/python
+ROOT=$(pwd)
+GAB=data/external/General-AgentBench
+WV=data/external/WebVoyager
+GAB_REV=35f5c027c31ddcb3366b28674c6cb2957460c0e2
+WV_REV=5a7896738c10bfb8b9edccce6bb0e0411f8ae569
+
+# Preview, then clone the pinned repositories.
+$PY scripts/setup_agentbench_official.py --dry-run
+$PY scripts/setup_agentbench_official.py
+
+# Install the unified runner and Tau simulator into this VM environment.
+# The General AgentBench pyproject is intentionally minimal; its requirements
+# file is required for the actual runner.
+pip install -r "$GAB/general_agent/requirements.txt"
+pip install -e "$GAB/general_agent"
+pip install -e "$GAB/benchmarks/tau2-bench"
+
+# MCP-Bench launches its own local MCP servers. Install each server's pinned
+# dependencies, then fill the upstream key file without committing secrets.
+cd "$GAB/benchmarks/mcp-bench/mcp_servers"
+bash ./install.sh
+cd "$ROOT"
+${EDITOR:-nano} "$GAB/benchmarks/mcp-bench/mcp_servers/api_key"
+# Required by the pinned suite: NPS_API_KEY, NASA_API_KEY, HF_TOKEN,
+# GOOGLE_MAPS_API_KEY, and NCI_API_KEY.
+
+# WebVoyager is separate from General AgentBench and needs Chrome/Selenium.
+pip install -r "$WV/requirements.txt"
+docker info
 ```
 
-Download all raw roadmap datasets:
+Create score-blind task manifests from exact known files. The adapters never
+recursively scan benchmark repositories.
 
 ```bash
-$PY scripts/setup_datasets.py --suite agentic_benchmarks --overwrite
+$PY experiments/prepare_agentbench.py \
+  --datasets browsecomp,mathhay,swe_bench_verified,terminal_bench,tau2_bench,mcp_bench \
+  --source-path "$GAB" --source-revision "$GAB_REV" \
+  --out-dir data/agentbench
+
+$PY experiments/prepare_agentbench.py --datasets webvoyager \
+  --source-path "$WV" --source-revision "$WV_REV" \
+  --out-dir data/agentbench
+
+$PY experiments/validate_agentbench.py \
+  --tasks-dir data/agentbench --require-provenance
+
+# Fail before spending GPU/API budget if a harness, key, or container is absent.
+$PY experiments/preflight_agentbench.py --strict
 ```
 
-Download only the requested roadmap set:
+Expected paper subsets:
 
-```bash
-$PY scripts/setup_datasets.py --suite agentic_benchmarks --overwrite \
-  --benchmarks browsecomp,webvoyager,swe_bench_verified,terminal_bench,mathhay,tau2_bench_data,tau2_bench_hud,mcp_bench
-```
+| Domain | Dataset | Tasks | Native executor/evaluator |
+|---|---|---:|---|
+| Search | BrowseComp | 124 | General AgentBench search + Serper/native evaluator |
+| Search | WebVoyager | 65 | pinned Selenium runner + multimodal judge |
+| Coding | SWE-Bench Verified | 50 | General AgentBench/OpenHands + Docker tests |
+| Coding | Terminal-Bench | 80 | General AgentBench/Terminal-Bench + Docker tests |
+| Reason | MathHay | 75 | General AgentBench MathHay evaluator |
+| Tool-Calling | Tau2-Bench | 50 | General AgentBench + Tau user simulator/native reward |
+| Tool-Calling | MCP-Bench | 52 | General AgentBench MCP servers + native judge |
 
-AgentBench status:
-
-| Domain | Dataset | Original | Setup key | Current repo status |
-|---|---:|---|---|---|
-| Search | BrowseComp | 1266 | `browsecomp` | task manifest ready; needs scored candidates/external eval |
-| Search | WebVoyager | 643 | `webvoyager` | task manifest ready; needs browser trajectories + scores |
-| Coding | SWE-Bench Verified | 500 | `swe_bench_verified` | task manifest ready; needs SWE harness scores |
-| Coding | Terminal-Bench | 230 | `terminal_bench` | raw only until manifest validates |
-| Reason | MathHay | 602 | `mathhay` | raw only until manifest validates |
-| Tool-Calling | Tau2-Bench | 278 | `tau2_bench_data`, `tau2_bench_hud` | task manifest ready; needs simulator scores |
-| Tool-Calling | MCP-Bench | 104 | `mcp_bench` | raw only until manifest validates |
-
-Before reporting final numbers, candidate trajectories must come from the
-appropriate agent environment and environment benchmarks must use official or
-reproducible evaluator outputs (`is_correct`, `score`, or `--evaluator-command`).
+The checked-in manifests already match these pinned sources. Regenerate them on
+the VM anyway so source hashes and checkout revisions are verified before spend.
 
 ---
 
@@ -420,211 +452,234 @@ $PY -m acdan.run_experiment --method acdan --dataset bfcl \
 
 ### 3c. General AgentBench: Search, Coding, Reason, Tool-Calling
 
-Use this path for the paper-style datasets: BrowseComp, WebVoyager, SWE-Bench
-Verified, Terminal-Bench, MathHay, Tau2-Bench, and MCP-Bench. This path prepares
-tasks, consumes K candidate trajectories from an agent/executor, then uses ACDAN
-as the self-choice selector. It reports selected score, pass@K, oracle score,
-and verification gap.
+The reportable flow has four immutable stages:
 
-Prepare raw sources and sampled task manifests for the currently validated
-AgentBench subset:
+```text
+native K rollouts -> blind candidate file -> blind selection -> score join
+                         |                       |               |
+                    no outcomes             no outcomes     official metrics
+```
+
+#### A. Start Local vLLM For The Unified Agent
+
+General AgentBench calls models through LiteLLM/OpenAI-compatible APIs. Run the
+generation model as a server; do not use ACDAN's offline vLLM object as the
+environment agent.
 
 ```bash
-$PY scripts/setup_datasets.py --suite agentic_benchmarks --overwrite \
-  --benchmarks browsecomp,webvoyager,swe_bench_verified,terminal_bench,mathhay,tau2_bench_data,tau2_bench_hud,mcp_bench
+PY=.venv/bin/python
+M=Qwen/Qwen2.5-7B-Instruct
+TAG=qwen7b
+K=8
 
-$PY experiments/prepare_agentbench.py --datasets browsecomp,webvoyager,swe_bench_verified,tau2_bench \
-  --out-dir data/agentbench --seed 0
+vllm serve "$M" --host 0.0.0.0 --port 8000 \
+  --api-key EMPTY --enable-auto-tool-choice --tool-call-parser hermes
 
-# These four should validate before you spend GPU/API budget.
-$PY experiments/validate_agentbench.py \
-  --tasks data/agentbench/browsecomp_tasks.jsonl \
-          data/agentbench/webvoyager_tasks.jsonl \
-          data/agentbench/swe_bench_verified_tasks.jsonl \
-          data/agentbench/tau2_bench_tasks.jsonl
+# In the experiment shell:
+export OPENAI_API_KEY=EMPTY
+export OPENAI_API_BASE=http://127.0.0.1:8000/v1
+export SERPER_API_KEY="YOUR_SERPER_API_KEY"
+GEN_MODEL="openai/$M"
+
+# The pinned runner receives the same values through --env-file.
+cat > .env <<EOF
+OPENAI_API_KEY=$OPENAI_API_KEY
+OPENAI_API_BASE=$OPENAI_API_BASE
+SERPER_API_KEY=$SERPER_API_KEY
+EOF
+chmod 600 .env
 ```
 
-Archive-backed datasets are not automatic-paper-ready yet. Run these only after
-confirming the raw source path points to the intended benchmark split, then
-require validation before using them:
+Use a model with reliable native tool calling. A text-only Qwen model cannot run
+the visual WebVoyager protocol; use a compatible multimodal model for that
+separate track.
 
-```bash
-$PY experiments/prepare_agentbench.py --datasets terminal_bench \
-  --out-dir data/agentbench --source-path data/raw/agentic_benchmarks/terminal_bench --seed 0
-$PY experiments/prepare_agentbench.py --datasets mathhay \
-  --out-dir data/agentbench --source-path data/raw/agentic_benchmarks/mathhay --seed 0
-$PY experiments/prepare_agentbench.py --datasets mcp_bench \
-  --out-dir data/agentbench --source-path data/raw/agentic_benchmarks/mcp_bench --seed 0
+#### B. Native K-Trajectory Generation And Official Scoring
 
-$PY experiments/validate_agentbench.py \
-  --tasks data/agentbench/terminal_bench_tasks.jsonl \
-          data/agentbench/mathhay_tasks.jsonl \
-          data/agentbench/mcp_bench_tasks.jsonl
-```
-
-Generate or import K candidate trajectories per task. The repo provides a
-generic text-attempt generator that creates `*_predictions.jsonl`; for
-WebVoyager/SWE/Terminal/Tau2/MCP, replace or post-process these attempts with
-real executor trajectories and official scores before making paper claims.
-
-```bash
-DATASET=browsecomp
-$PY experiments/gen_agentbench_predictions.py \
-  --tasks data/agentbench/${DATASET}_tasks.jsonl \
-  --out results/agentbench/${DATASET}_${TAG}_predictions.jsonl \
-  --backend vllm --model $M --k 8 --temperature 0.8 --max-tokens 1024
-
-# CPU-only smoke test; not a paper result.
-$PY experiments/gen_agentbench_predictions.py \
-  --tasks data/agentbench/${DATASET}_tasks.jsonl \
-  --out results/agentbench/${DATASET}_${TAG}_predictions_mock.jsonl \
-  --backend mock --k 2 --limit 3
-```
-
-The prediction/candidate schema is:
-
-```json
-{
-  "task": {
-    "task_id": "browsecomp-00001",
-    "dataset": "browsecomp",
-    "domain": "search",
-    "instruction": "...",
-    "evaluator": "external_browsecomp",
-    "gold": "..."
-  },
-  "candidates": [
-    {
-      "candidate_id": "0",
-      "final_answer": "...",
-      "trajectory": [{"role": "assistant", "content": "..."}],
-      "is_correct": false
-    }
-  ]
-}
-```
-
-If your agent/executor writes one prediction per line, group it with:
-
-```bash
-$PY experiments/build_agentbench_candidates.py \
-  --tasks data/agentbench/${DATASET}_tasks.jsonl \
-  --predictions results/agentbench/${DATASET}_${TAG}_predictions.jsonl \
-  --out data/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl \
-  --min-candidates 8
-
-# Strict validation; use this when candidates already contain official scores.
-$PY experiments/validate_agentbench.py \
-  --tasks data/agentbench/${DATASET}_tasks.jsonl \
-  --candidates data/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl \
-  --min-candidates 8
-```
-
-For external evaluators such as BrowseComp, generated predictions will not have
-`score`/`is_correct` until the official harness scores them. Use structural
-validation only while you are about to pass an evaluator command:
-
-```bash
-$PY experiments/validate_agentbench.py \
-  --tasks data/agentbench/${DATASET}_tasks.jsonl \
-  --candidates data/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl \
-  --min-candidates 8 \
-  --allow-external-unscored
-```
-
-For official environment benchmarks, fill `is_correct` or `score` from the
-official harness, or pass an evaluator command. This is the reportable path:
+Run one dataset first. Omitting `--execute` prints the exact upstream command.
 
 ```bash
 DATASET=browsecomp
-CAND=data/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl
+NATIVE=runs/agentbench/native/${DATASET}_${TAG}_k${K}
+
+$PY experiments/run_agentbench_official.py \
+  --dataset "$DATASET" --model "$GEN_MODEL" --model-name "$TAG" \
+  --k "$K" --base-seed 42 --output-dir "$NATIVE"
+
+$PY experiments/run_agentbench_official.py \
+  --dataset "$DATASET" --model "$GEN_MODEL" --model-name "$TAG" \
+  --k "$K" --base-seed 42 --output-dir "$NATIVE" --execute
+```
+
+Dataset mapping used by this command:
+
+| ACDAN key | Native key | Required execution layer |
+|---|---|---|
+| `browsecomp` | `search` | Serper search and native answer evaluator |
+| `mathhay` | `mathhay` | long-context MathHay evaluator |
+| `swe_bench_verified` | `swebench` | OpenHands, repository container, tests |
+| `terminal_bench` | `terminalbench` | terminal container and task tests |
+| `tau2_bench` | `tau2bench` | stateful simulator and user model |
+| `mcp_bench` | `mcpbench` | official MCP servers and native judge |
+
+For a one-task harness smoke, make a native subset and pass it to the runner:
+
+```bash
+UPSTREAM=data/external/General-AgentBench/general_agent/data
+$PY experiments/subset_agentbench_native_tasks.py \
+  --source "$UPSTREAM/search_benchmark.json" \
+  --out runs/agentbench/smoke/search_1.json --limit 1
+
+$PY experiments/run_agentbench_official.py \
+  --dataset browsecomp --model "$GEN_MODEL" --model-name "$TAG" \
+  --k 2 --task-file runs/agentbench/smoke/search_1.json \
+  --output-dir runs/agentbench/native/browsecomp_smoke --execute
+```
+
+#### C. Import Blind Candidates And Immutable Scores
+
+```bash
+ART=runs/agentbench/artifacts
+mkdir -p "$ART"
+
+$PY experiments/import_general_agentbench.py \
+  --dataset "$DATASET" --source "$NATIVE" --k "$K" \
+  --tasks data/agentbench/${DATASET}_tasks.jsonl \
+  --candidates-out "$ART/${DATASET}_${TAG}_k${K}_candidates.jsonl" \
+  --trajectories-out "$ART/${DATASET}_${TAG}_k${K}_trajectories.jsonl" \
+  --scores-out "$ART/${DATASET}_${TAG}_k${K}_scores.jsonl" \
+  --evaluator-version general-agentbench@35f5c027
+
+$PY experiments/validate_agentbench.py \
+  --tasks data/agentbench/${DATASET}_tasks.jsonl \
+  --candidates "$ART/${DATASET}_${TAG}_k${K}_candidates.jsonl" \
+  --scores "$ART/${DATASET}_${TAG}_k${K}_scores.jsonl" \
+  --min-candidates "$K" --require-blind --require-provenance
+```
+
+The candidate file contains trajectories and generation cost but no score,
+correctness flag, or gold answer. The score file is loaded only after selection.
+
+#### D. Blind ACDAN Selection And Score Join
+
+```bash
+ENCODER_ARGS="--encoder hash"
+LATENT_ARGS="--no-latent"
+MONITOR_ARGS="--monitor --progress-every 25"
 SELECTOR_ARGS="--task-preview-chars 4096 --candidate-preview-chars 2048"
-export ACDAN_EXTERNAL_BROWSECOMP_CMD="python official_browsecomp_eval.py --input {input} --output {output}"
+CAND="$ART/${DATASET}_${TAG}_k${K}_candidates.jsonl"
+SCORES="$ART/${DATASET}_${TAG}_k${K}_scores.jsonl"
 
 for METHOD in acdan bon asc sc cot; do
-  $PY experiments/run_agentbench_selection.py --method $METHOD \
-    --candidates-path $CAND \
-    --policy vllm --policy-model $M --prm llm \
+  SEL=results/agentbench/reportable/${DATASET}_${TAG}_${METHOD}_selection.json
+  OUT=results/agentbench/reportable/${DATASET}_${TAG}_${METHOD}.json
+
+  $PY experiments/run_agentbench_selection.py --method "$METHOD" \
+    --candidates-path "$CAND" --selection-only \
+    --policy vllm --policy-model "$M" --prm llm \
     $ENCODER_ARGS $LATENT_ARGS $MONITOR_ARGS $SELECTOR_ARGS \
-    --n 8 --seed 0 --save-per-task \
-    --out results/agentbench/${DATASET}_${TAG}_${METHOD}.json
+    --n "$K" --seed 0 --save-per-task --out "$SEL"
+
+  $PY experiments/evaluate_agentbench_selection.py \
+    --selection "$SEL" --candidates "$CAND" --scores "$SCORES" \
+    --out "$OUT"
 done
 ```
 
-`--task-preview-chars` and `--candidate-preview-chars` prevent the selector from
-asking vLLM to score an entire long task/trajectory as a continuation. This is
-still a fair selector comparison because every method sees the same preview
-budget. Set either value to `0` only for short inputs or if you intentionally
-want full-text scoring.
+Preview limits preserve both the beginning and end of each trajectory, including
+the final response and late tool observations. Use `0` only when the model
+context can safely score complete trajectories for every method.
 
-Run the same comparison for every dataset that has a non-empty candidate file:
+After all six native datasets have artifacts, the equivalent matrix command is:
 
 ```bash
-AGENTBENCH_DATASETS="browsecomp webvoyager swe_bench_verified tau2_bench"
-SELECTOR_ARGS="--task-preview-chars 4096 --candidate-preview-chars 2048"
-export ACDAN_EXTERNAL_BROWSECOMP_CMD="python official_browsecomp_eval.py --input {input} --output {output}"
-for DATASET in $AGENTBENCH_DATASETS; do
-  CAND=data/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl
-  $PY experiments/validate_agentbench.py \
-    --tasks data/agentbench/${DATASET}_tasks.jsonl \
-    --candidates $CAND \
-    --min-candidates 8 \
-    --allow-external-unscored
-
-  for METHOD in acdan bon asc sc cot; do
-    $PY experiments/run_agentbench_selection.py --method $METHOD \
-      --candidates-path $CAND \
-      --policy vllm --policy-model $M --prm llm \
-      $ENCODER_ARGS $LATENT_ARGS $MONITOR_ARGS $SELECTOR_ARGS \
-      --n 8 --seed 0 --save-per-task \
-      --out results/agentbench/${DATASET}_${TAG}_${METHOD}.json
-  done
-done
-```
-
-Equivalent matrix script:
-
-```bash
-DATASETS="browsecomp webvoyager swe_bench_verified tau2_bench" \
-TAG=qwen7b K=8 MODEL=$M \
+DATASETS="browsecomp mathhay swe_bench_verified terminal_bench tau2_bench mcp_bench" \
+MODEL="$M" TAG="$TAG" K="$K" \
+ARTIFACT_DIR=runs/agentbench/artifacts \
 ENCODER_ARGS="--encoder hash" LATENT_ARGS="--no-latent" \
-SELECTOR_ARGS="--task-preview-chars 4096 --candidate-preview-chars 2048" \
-ACDAN_EXTERNAL_BROWSECOMP_CMD="python official_browsecomp_eval.py --input {input} --output {output}" \
-experiments/run_agentbench_matrix.sh
+bash experiments/run_agentbench_matrix.sh
 ```
 
-External evaluator examples:
+#### E. Held-Out Calibration
+
+Never fit confidence on the reported test tasks. Run the same selector on a
+disjoint calibration task-ID file, join its official scores, then fit:
 
 ```bash
-$PY experiments/run_agentbench_selection.py --method acdan \
-  --candidates-path results/agentbench/swe_bench_verified_${TAG}_k8_candidates.jsonl \
-  --policy vllm --policy-model $M --prm llm \
-  $ENCODER_ARGS $LATENT_ARGS $MONITOR_ARGS $SELECTOR_ARGS \
-  --evaluator-command external_swe_bench="python official_swe_eval.py --input {input} --output {output}" \
-  --out results/agentbench/swe_bench_verified_${TAG}_acdan.json
+$PY experiments/fit_agentbench_calibrator.py \
+  --calibration-result results/agentbench/calibration/${DATASET}_${TAG}_acdan.json \
+  --out results/agentbench/calibrators/${DATASET}_${TAG}_acdan.json
+
+$PY experiments/evaluate_agentbench_selection.py \
+  --selection results/agentbench/reportable/${DATASET}_${TAG}_acdan_selection.json \
+  --candidates "$CAND" --scores "$SCORES" \
+  --calibrator results/agentbench/calibrators/${DATASET}_${TAG}_acdan.json \
+  --out results/agentbench/reportable/${DATASET}_${TAG}_acdan.json
 ```
 
-For a smoke run without official scores, add `--allow-unevaluated`; do not
-report those metrics, because every unscored external candidate is treated as
-incorrect.
+Without a disjoint calibration split, report raw-confidence ECE and label it as
+uncalibrated. Do not fit the calibrator on test outcomes.
+
+#### F. WebVoyager Separate Track
+
+WebVoyager is not supported by the General AgentBench unified runner. Run its
+pinned Selenium implementation K times with a multimodal model, preserving one
+output directory per pass, then import and score the screenshots:
 
 ```bash
-DATASET=browsecomp
-CAND=data/agentbench/${DATASET}_${TAG}_k8_candidates.jsonl
-$PY experiments/run_agentbench_selection.py --method cot \
-  --candidates-path $CAND \
-  --policy mock --prm mock \
-  $ENCODER_ARGS $LATENT_ARGS \
-  --allow-unevaluated --limit 3 \
-  --out results/agentbench/${DATASET}_${TAG}_smoke_unscored.json
+WV=data/external/WebVoyager
+WV_TAG=gpt4o
+WEBVOYAGER_MODEL=gpt-4o
+WEBVOYAGER_JUDGE=gpt-4o
+WV_NATIVE=runs/agentbench/native/webvoyager_${WV_TAG}_k${K}
 
-ALLOW_UNEVALUATED=1 \
-SELECTOR_ARGS="--task-preview-chars 4096 --candidate-preview-chars 2048" \
-experiments/run_agentbench_matrix.sh
+$PY experiments/export_webvoyager_subset.py \
+  --manifest data/agentbench/webvoyager_tasks.jsonl \
+  --native-source "$WV/data/WebVoyager_data.jsonl" \
+  --out runs/agentbench/native/webvoyager_tasks_65.jsonl
+
+for PASS in $(seq 1 "$K"); do
+  python "$WV/run.py" \
+    --test_file runs/agentbench/native/webvoyager_tasks_65.jsonl \
+    --api_key "$OPENAI_API_KEY" --api_model "$WEBVOYAGER_MODEL" \
+    --seed $((41 + PASS)) --headless \
+    --output_dir "$WV_NATIVE/pass_${PASS}"
+done
+
+$PY experiments/import_webvoyager.py \
+  --source "$WV_NATIVE" --tasks data/agentbench/webvoyager_tasks.jsonl --k "$K" \
+  --candidates-out "$ART/webvoyager_${WV_TAG}_k${K}_candidates.jsonl" \
+  --trajectories-out "$ART/webvoyager_${WV_TAG}_k${K}_trajectories.jsonl"
+
+$PY experiments/score_webvoyager.py \
+  --checkout "$WV" --source "$WV_NATIVE" --k "$K" \
+  --judge-model "$WEBVOYAGER_JUDGE" \
+  --evaluator-version webvoyager@5a789673 \
+  --out "$ART/webvoyager_${WV_TAG}_k${K}_scores.jsonl" --resume
 ```
 
-Do not report `browsecomp_proxy`/`mathhay_proxy` as General AgentBench. Those
-names are selector-only smoke/proxy datasets for debugging DTO behavior.
+The official WebVoyager task file contains 643 tasks. The export command freezes
+the exact 65 IDs in the checked-in manifest; do not evaluate a different subset.
+
+#### G. Tables And Confidence Intervals
+
+```bash
+$PY experiments/collect_agentbench_results.py \
+  --results results/agentbench/reportable/{browsecomp,mathhay,swe_bench_verified,terminal_bench,tau2_bench,mcp_bench}_${TAG}_{acdan,bon,asc,sc,cot}.json \
+  --reference bon --bootstrap-samples 2000 --seed 0 \
+  --csv-out results/agentbench/reportable/summary.csv \
+  --comparisons-out results/agentbench/reportable/paired_vs_bon.json
+```
+
+Headline metrics are selected accuracy/official score, pass@K, recovery rate,
+verification gap or oracle regret, ECE, Brier, AURC, selector prompt tokens,
+selector latency, samples, and actual verified candidates. Generation tokens are
+reported separately because every selector shares the same frozen candidate
+pool. `mean_token_surrogate` is an appendix diagnostic, not an AgentBench cost.
+
+Do not report `browsecomp_proxy`, `mathhay_proxy`, the old
+`data/agentbench/browsecomp_qwen7b_k8_candidates.jsonl`, or
+`--allow-unevaluated` runs as General AgentBench results.
 
 ---
 
@@ -640,8 +695,10 @@ names are selector-only smoke/proxy datasets for debugging DTO behavior.
 8. Secondary baselines: `tot`, `rap`, `refine`, `s1`.
 9. AIME 2025 and Omni-MATH after the main runs are stable.
 10. Latent revisit: full latent, `--no-ttt`, and `--no-latent`.
-11. Raw roadmap setup for BrowseComp/WebVoyager/SWE-Bench/Terminal-Bench/MathHay/Tau2/MCP.
-12. Add executors/adapters before claiming roadmap benchmark numbers.
+11. Clone and verify pinned official AgentBench repositories; regenerate all seven manifests.
+12. Run one-task native harness smoke tests, then import blind candidates and official scores.
+13. Run ACDAN/BoN/ASC/SC/CoT blind selection on shared candidate pools.
+14. Join scores, fit calibration only on disjoint tasks, and collect paired/Pareto results.
 
 ---
 
@@ -663,9 +720,12 @@ Do not claim graph/inertia improve GSM8K/MATH accuracy; those are one-step
 answer-selection tasks. Do not claim BFCL argument correctness from the current
 runner until official AST/executable evaluation is connected.
 
-Report `ablation`, `total_real_prompt_tokens`, `mean_latency_s`,
-`mean_samples`, `mean_verified_candidates`, `mean_prm_passes`, mean +- std over
-seeds, and math candidate diagnostics in every table.
+For AgentBench report selected accuracy/official score, pass@K, recovery rate,
+verification gap or oracle regret, ECE, Brier, AURC, actual selector prompt
+tokens, selector latency, samples, and verified candidates. For the original
+math/BFCL runner also report `ablation`, `total_real_prompt_tokens`,
+`mean_latency_s`, `mean_samples`, `mean_verified_candidates`,
+`mean_prm_passes`, mean +- std over seeds, and candidate diagnostics.
 
 ---
 
