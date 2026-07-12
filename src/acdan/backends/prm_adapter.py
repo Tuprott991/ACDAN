@@ -50,6 +50,8 @@ class LLMAsProcessReward:
         self._no = self._ids(no_tokens)
         self._reward_cache: dict[tuple[str, str, int, int], np.ndarray] = {}
         self._target_cache: dict[tuple[str, str, int, int], np.ndarray] = {}
+        self._extension_cache: dict[tuple[str, str, tuple[int, ...]], np.ndarray] = {}
+        self._trajectory_cache: dict[tuple[str, str, tuple[int, ...]], float] = {}
         self.n_prompt_tokens = 0
 
     def set_latent_quality_fn(self, fn: Callable[[np.ndarray], float]) -> None:
@@ -195,3 +197,102 @@ class LLMAsProcessReward:
         R = self.step_reward_matrix(task, latent)
         sig = 1.0 / (1.0 + np.exp(-R))
         return [float(sig[min(h, R.shape[0] - 1), int(a)]) for h, a in enumerate(actions)]
+
+    # ------------------------------------------ autoregressive sequence rewards
+
+    def _latent_digest(self, latent: np.ndarray) -> str:
+        arr = np.ascontiguousarray(latent, dtype=np.float64)
+        return hashlib.blake2b(arr.view(np.uint8), digest_size=12).hexdigest()
+
+    @staticmethod
+    def _format_prefix(task: Task, prefix: Sequence[int]) -> str:
+        if not prefix:
+            return "(none)"
+        return "\n".join(
+            f"{i + 1}. {task.vocab[int(action)]}"
+            for i, action in enumerate(prefix)
+        )
+
+    def extension_rewards(
+        self, task: Task, latent: np.ndarray, prefix: Sequence[int]
+    ) -> np.ndarray:
+        """P(useful) for every extension, conditioned on the selected prefix."""
+        return self.extension_rewards_batch(task, latent, [prefix])[0]
+
+    def extension_rewards_batch(
+        self,
+        task: Task,
+        latent: np.ndarray,
+        prefixes: Sequence[Sequence[int]],
+    ) -> np.ndarray:
+        """Score all active prefixes in one PRM generation batch."""
+        prefix_keys = [tuple(int(action) for action in prefix) for prefix in prefixes]
+        digest = self._latent_digest(latent)
+        missing = [
+            prefix for prefix in prefix_keys
+            if (task.task_id, digest, prefix) not in self._extension_cache
+        ]
+        prompt = str(task.metadata.get("prompt", ""))
+        if missing:
+            prompts: List[str] = []
+            for prefix in missing:
+                selected = self._format_prefix(task, prefix)
+                prompts.extend([
+                    (
+                        "Judge the next tool call in the context of the complete request and "
+                        "the calls already selected. Reward coverage of an unresolved subtask; "
+                        "reject wrong ordering and redundant duplicate work.\n\n"
+                        f"Request and tools:\n{prompt}\n\n"
+                        f"Selected calls:\n{selected}\n\n"
+                        f"Proposed next call: {name}\n"
+                        "Is this the correct next call? Answer yes or no.\nAnswer:"
+                    )
+                    for name in task.vocab
+                ])
+            matrix = np.asarray(self._p_yes(prompts), dtype=np.float64).reshape(
+                len(missing), task.vocab_size
+            )
+            for prefix, row in zip(missing, matrix):
+                self._extension_cache[(task.task_id, digest, prefix)] = row.copy()
+        return np.stack([
+            self._extension_cache[(task.task_id, digest, prefix)]
+            for prefix in prefix_keys
+        ])
+
+    def trajectory_rewards(
+        self,
+        task: Task,
+        latent: np.ndarray,
+        trajectories: Sequence[Sequence[int]],
+    ) -> List[float]:
+        """P(complete and correct) for complete tool-name trajectories."""
+        digest = self._latent_digest(latent)
+        prompt = str(task.metadata.get("prompt", ""))
+        scores: List[float | None] = []
+        missing_prompts: List[str] = []
+        missing_positions: List[int] = []
+        keys: List[tuple[str, str, tuple[int, ...]]] = []
+        for trajectory in trajectories:
+            path = tuple(int(action) for action in trajectory)
+            key = (task.task_id, digest, path)
+            keys.append(key)
+            cached = self._trajectory_cache.get(key)
+            scores.append(cached)
+            if cached is None:
+                missing_positions.append(len(scores) - 1)
+                missing_prompts.append(
+                    "Judge this complete tool-call plan. It must cover every user request "
+                    "exactly once, preserve required order, and contain no missing or "
+                    "redundant calls.\n\n"
+                    f"Request and tools:\n{prompt}\n\n"
+                    f"Proposed complete plan:\n{self._format_prefix(task, path)}\n\n"
+                    "Does this plan fully and correctly satisfy the request? "
+                    "Answer yes or no.\nAnswer:"
+                )
+        if missing_prompts:
+            values = self._p_yes(missing_prompts)
+            for position, value in zip(missing_positions, values):
+                score = float(value)
+                scores[position] = score
+                self._trajectory_cache[keys[position]] = score
+        return [float(score) for score in scores]

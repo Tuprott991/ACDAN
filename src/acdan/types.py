@@ -96,6 +96,8 @@ class Plan:
     dto_steps: int = 0
     # Objective value trajectory across DTO iterations (for plots / rebuttal).
     objective_trace: List[float] = field(default_factory=list)
+    # Planner-specific diagnostics such as lattice size and candidate count.
+    metadata: Dict[str, object] = field(default_factory=dict)
 
     @property
     def probs(self) -> np.ndarray:

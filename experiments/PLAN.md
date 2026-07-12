@@ -96,6 +96,7 @@ Equivalent explicit commands:
 ```bash
 $PY scripts/setup_datasets.py --suite math --overwrite
 $PY scripts/setup_datasets.py --suite bfcl --overwrite
+$PY scripts/rebuild_bfcl_splits.py
 $PY scripts/setup_datasets.py --suite agentic_raw --overwrite
 ```
 
@@ -107,7 +108,7 @@ Expected primary files:
 | Reason | MATH-500 | `--suite math` | `data/math500.jsonl` | runnable after candidate generation |
 | Reason | AIME 2025 | `--suite math` | `data/aime2025.jsonl` | runnable after candidate generation |
 | Reason | Omni-MATH | `--suite math` | `data/omni_math.jsonl` | runnable after candidate generation |
-| Tool-Calling | BFCL | `--suite bfcl` | `data/bfcl_full.jsonl`, `data/bfcl_dev.jsonl`, `data/bfcl_test.jsonl` | runnable as tool-name selection |
+| Tool-Calling | BFCL | `--suite bfcl` | full 2600, stratified dev 520, held-out test 2080 | runnable as tool-name selection |
 | Tool-Calling | Tau2 raw | `--suite agentic_raw` | `data/raw/agentic_benchmarks/tau2_bench_*` | r  aw only; no runner adapter yet |
 
 Sanity checks:
@@ -374,6 +375,53 @@ For a full-latent rerun, set both `LATENT_ARGS=""` and
 ```bash
 TRAIN=data/bfcl_dev.jsonl
 TEST=data/bfcl_test.jsonl
+SEQ_ARGS="--dto-mode autoregressive --sequence-max-steps 8 --sequence-min-steps 1 --sequence-beam-width 4 --sequence-samples 8 --sequence-iters 24 --sequence-lr 0.35 --sequence-kl-weight 0.10 --sequence-step-reward-weight 1.0 --sequence-trajectory-reward-weight 2.0 --sequence-self-consistency-weight 0.20 --sequence-length-cost 0.01"
+```
+
+Tune sequence DTO on `TRAIN` only, freeze its coefficients, then run `TEST`.
+The planner scores every root tool, conditions later calls on the selected
+prefix, proposes `STOP`, batches active prefixes by depth, and optimizes cached
+lattice scores without using the gold call count as its horizon.
+
+```bash
+# Integration smoke.
+$PY -m acdan.run_experiment --method acdan --dataset bfcl \
+  --data-path $TEST --limit 25 \
+  --policy vllm --policy-model $M --prm llm \
+  --encoder hash --no-latent $MONITOR_ARGS $SEQ_ARGS \
+  --disable no_graph,no_inertia,no_verification \
+  --seed 0 --save-per-task \
+  --out results/_smoke_bfcl_${TAG}_sequence_dto.json
+
+# Full autoregressive lattice DTO.
+$PY -m acdan.run_experiment --method acdan --dataset bfcl \
+  --data-path $TEST --policy vllm --policy-model $M --prm llm \
+  --encoder hash --no-latent $MONITOR_ARGS $SEQ_ARGS \
+  --disable no_graph,no_inertia,no_verification \
+  --seed 0 --save-per-task \
+  --out results/bfcl_${TAG}_sequence_dto.json
+
+# Paired decision-rule ablation: same lattice and scores, zero DTO updates.
+$PY -m acdan.run_experiment --method acdan --dataset bfcl \
+  --data-path $TEST --policy vllm --policy-model $M --prm llm \
+  --encoder hash --no-latent $MONITOR_ARGS $SEQ_ARGS \
+  --disable no_dto,no_graph,no_inertia,no_verification \
+  --seed 0 --save-per-task \
+  --out results/bfcl_${TAG}_sequence_no_dto.json
+```
+
+Report category macro accuracy and `BFCL_v3_parallel_multiple` separately.
+Saved rows include decoded actions and lattice metadata. Current evaluation is
+still exact tool-name sequence matching; official AST/executable evaluation is
+required before claiming argument correctness.
+
+The checked-in split changed from the old overlapping 1000/1000 files to the
+non-overlapping 520/2080 split. Do not compare new aggregate scores directly to
+`results/old_res`; rerun every method on the same held-out manifest.
+
+Legacy independent `H x V` DTO and baselines remain required controls:
+
+```bash
 
 for METHOD in acdan bon asc sc cot; do
   $PY -m acdan.run_experiment --method $METHOD --dataset bfcl \

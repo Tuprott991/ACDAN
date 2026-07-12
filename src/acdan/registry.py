@@ -32,6 +32,16 @@ class CoreModel(Protocol):
     def prior_logits(self, task: Task, latent: np.ndarray) -> np.ndarray:
         ...
 
+    def conditional_prior_logits(
+        self,
+        task: Task,
+        latent: np.ndarray,
+        prefix: tuple[int, ...],
+        include_stop: bool = False,
+    ) -> np.ndarray:
+        """Next-action logits conditioned on an executed action prefix."""
+        ...
+
 
 class DatasetAdapter(Protocol):
     """Yields tasks for evaluation."""
@@ -70,6 +80,35 @@ class MockCoreModel:
                 a = task.optimal_plan[h % len(task.optimal_plan)]
                 logits[h, a] += bump
         return logits
+
+    def conditional_prior_logits(
+        self,
+        task: Task,
+        latent: np.ndarray,
+        prefix: tuple[int, ...],
+        include_stop: bool = False,
+    ) -> np.ndarray:
+        """Deterministic prefix-conditioned mock prior for lattice tests."""
+        base = self.prior_logits(task, latent)
+        depth = len(prefix)
+        if depth < base.shape[0]:
+            row = np.array(base[depth], copy=True)
+        else:
+            rng = np.random.default_rng(stable_seed(task.task_id, "core-prefix", prefix))
+            row = self.noise * rng.normal(0.0, 1.0, size=task.vocab_size)
+        if prefix and task.optimal_plan is not None:
+            matched = sum(
+                int(a == task.optimal_plan[i])
+                for i, a in enumerate(prefix[:len(task.optimal_plan)])
+            )
+            if depth < len(task.optimal_plan):
+                row[task.optimal_plan[depth]] += 0.05 * matched
+        if not include_stop:
+            return row
+        stop = -4.0
+        if task.optimal_plan is not None and depth >= len(task.optimal_plan):
+            stop = float(np.max(row) + 2.0)
+        return np.concatenate([row, np.asarray([stop], dtype=np.float64)])
 
 
 # --------------------------------------------------------------------------

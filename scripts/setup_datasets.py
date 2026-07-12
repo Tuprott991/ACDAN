@@ -27,6 +27,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from acdan.datasets.math_answer import extract_final_answer
+from acdan.datasets.bfcl import stratified_bfcl_split
 
 
 SourceKind = Literal["hf_dataset", "github_zip", "manual"]
@@ -521,13 +522,10 @@ def prepare_bfcl(out_dir: Path, overwrite: bool, token: str | None) -> dict[str,
 
     full_count = _write_jsonl(out_dir / "bfcl_full.jsonl", rows, overwrite)
 
-    # Keep a deterministic split for inertia fitting versus evaluation. The
-    # full file remains available for compatibility with older experiments.
-    dev_rows = rows[: min(1000, len(rows))]
-    test_start = len(dev_rows)
-    test_rows = rows[test_start: test_start + min(1000, max(0, len(rows) - test_start))]
-    if not test_rows:
-        test_rows = rows
+    # Hyperparameter development uses a stable 20% category-stratified split;
+    # the remaining 80% is held out. Paper-level official BFCL evaluation still
+    # uses the complete upstream suite and official executable evaluator.
+    dev_rows, test_rows = stratified_bfcl_split(rows)
     dev_count = _write_jsonl(out_dir / "bfcl_dev.jsonl", dev_rows, overwrite)
     test_count = _write_jsonl(out_dir / "bfcl_test.jsonl", test_rows, overwrite)
     return {"bfcl_full": full_count, "bfcl_dev": dev_count, "bfcl_test": test_count}

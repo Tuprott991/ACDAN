@@ -76,6 +76,7 @@ def test_outcome_tool_sequence():
     task = _task(raw)
     assert outcome_tool_sequence(task, [0, 1]) is True
     assert outcome_tool_sequence(task, [1, 0]) is False
+    assert outcome_tool_sequence(task, [0, 1, 2]) is False
 
 
 def test_agent_uses_outcome_checker():
@@ -282,6 +283,22 @@ def test_runner_end_to_end_mock(tmp_path):
     assert s["n_tasks"] == 12
     assert 0.0 <= s["accuracy"] <= 1.0
     assert out.exists()
+
+
+def test_runner_reports_bfcl_category_accuracy(tmp_path):
+    path = tmp_path / "bfcl.jsonl"
+    path.write_text(
+        '{"task_id":"x","prompt":"do a","tools":["a"],"gold":["a"],'
+        '"horizon":1,"category":"BFCL_v3_simple"}\n',
+        encoding="utf-8",
+    )
+    args = build_parser().parse_args([
+        "--method", "acdan", "--dataset", "bfcl", "--data-path", str(path),
+        "--limit", "1",
+    ])
+    summary = run(args)["summary"]
+    assert summary["category_accuracy"] == {"BFCL_v3_simple": 1.0}
+    assert summary["category_macro_accuracy"] == 1.0
 
 
 def test_runner_baseline_mock():

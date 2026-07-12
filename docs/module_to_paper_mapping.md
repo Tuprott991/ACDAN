@@ -10,6 +10,7 @@ the proposal *"Adaptive Calibrated Differentiable Agentic Networks (ACDAN)"*
 | Latent-space reasoning (recurrent block unroll) | "Lập luận ẩn ... recurrent block" | [`latent_reasoning.py`](../src/acdan/latent_reasoning.py) `LatentReasoner._unroll` |
 | In-Place Test-Time Training (In-Place TTT) | "Huấn luyện thời gian kiểm thử tại chỗ" | `LatentReasoner._ttt_adapt` |
 | Differentiable Textual Optimization (DTO) | "Tối ưu hóa Văn bản Vi phân" | [`dto.py`](../src/acdan/dto.py) `DifferentiableTextOptimizer.optimize` |
+| Autoregressive Lattice DTO | multi-step extension of DTO | [`sequence_dto.py`](../src/acdan/sequence_dto.py) `AutoregressiveLatticeOptimizer` |
 | First-order logit update `L ← L − η ∇J` | "Tối ưu hóa bậc một qua DTO" | `DifferentiableTextOptimizer.optimize` loop |
 | Process Reward Model (TIM-PRM / Athena-PRM) | "Multimodal PRM", "TIM-PRM" | [`rewards.py`](../src/acdan/rewards.py) `ProcessRewardModel`, `MockProcessReward` |
 | PRM gradient back-prop into logits | "Đạo hàm từ PRM được truyền ngược" | `MockProcessReward.grad_wrt_probs` + DTO softmax VJP |

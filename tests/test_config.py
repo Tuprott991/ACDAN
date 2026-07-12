@@ -2,7 +2,7 @@
 
 import dataclasses
 
-from acdan.config import ACDANConfig, AblationFlags, baseline_cot_config
+from acdan.config import ACDANConfig, AblationFlags, SequenceDTOConfig, baseline_cot_config
 
 
 def test_from_dict_partial_uses_defaults():
@@ -36,3 +36,11 @@ def test_baseline_disables_everything():
 def test_describe_lists_modules():
     desc = AblationFlags().describe()
     assert "enabled=" in desc and "disabled=" in desc
+
+
+def test_sequence_dto_rejects_invalid_bounds():
+    import pytest
+    with pytest.raises(ValueError):
+        SequenceDTOConfig(max_steps=0)
+    with pytest.raises(ValueError):
+        SequenceDTOConfig(max_steps=2, min_steps=3)

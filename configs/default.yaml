@@ -29,6 +29,22 @@ dto:                          # Differentiable Textual Optimization
   likelihood_weight: 0.1      # core-model log-likelihood prior
   temperature: 1.0
 
+sequence_dto:                 # Prefix-conditioned trajectory-lattice DTO
+  enabled: false              # opt in with --dto-mode autoregressive
+  max_steps: 8
+  min_steps: 1
+  beam_width: 4
+  samples: 8
+  iters: 24
+  lr: 0.35
+  temperature: 1.0
+  kl_weight: 0.1
+  step_reward_weight: 1.0
+  trajectory_reward_weight: 2.0
+  self_consistency_weight: 0.2
+  length_cost: 0.01
+  stop_logit: -2.0
+
 inertia:                      # Tool Usage Inertia / Inertial Sensing
   threshold: 0.65             # high-inertia activation threshold
   smoothing: 0.5              # Laplace smoothing of transition counts

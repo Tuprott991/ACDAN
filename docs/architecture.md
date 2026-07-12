@@ -60,6 +60,11 @@ document explains the data flow and the responsibility of each module.
      logit matrix and runs `T` first-order updates that trade off core-model
      likelihood, PRM process reward, an anti-overthinking length penalty, and a
      dependency-diversity (von Neumann entropy) term. Gradients are analytic.
+   - **Autoregressive Lattice DTO** (`sequence_dto.py`): for multi-step tool
+     trajectories, creates prefix-conditioned nodes with explicit `STOP`, dense
+     root coverage, beam/self-consistent proposals, trajectory rewards, and
+     exact value/occupancy gradients. Frozen model scores are cached; DTO
+     iterations update only lattice offsets.
    - **Inertial Sensing** (`inertia.py`): for familiar tool transitions, fills
      the action directly from a learned Markov model, *skipping the LLM planning
      call* — the main inference-cost saver.

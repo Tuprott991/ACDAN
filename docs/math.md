@@ -45,6 +45,34 @@ Term-by-term implementation (`dto.py`):
   (repetition / overthinking).
 - `H_vN` — see §3.
 
+## 1b. Autoregressive Lattice DTO
+
+For multi-step tool use, sequence mode replaces the independent matrix with a
+bounded prefix trie. A node `n = (x, a_<h, o_<h)` has policy
+
+```
+pi_n(a) = softmax((log p0(a | n) + Delta_n,a) / tau)
+```
+
+over next-tool edges plus `STOP`. The frozen LLM supplies `p0`; only `Delta` is
+optimized. Complete candidates combine dense root-tool coverage, prefix beam
+search, and stochastic self-consistency samples. A trajectory can terminate at
+any depth, so the planner does not receive the gold call count as `H`.
+
+For edge reward `r(n,a)` and child value `V(n')`:
+
+```
+Q(n,a) = r(n,a) + V(n')
+V(n)   = sum_a pi_n(a) Q(n,a) - lambda KL(pi_n || p0_n)
+```
+
+Values are computed backward and node occupancies forward. The resulting exact
+gradient is the occupancy-weighted, KL-regularized advantage passed through the
+node softmax. Core and PRM outputs are cached before optimization, so additional
+first-order iterations add no model calls. Final decoding uses regularized
+Bellman values rather than independent row argmax. Finite-difference coverage is
+in `tests/test_sequence_dto.py`.
+
 ## 2. First-order update
 
 ```

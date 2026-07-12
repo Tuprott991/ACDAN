@@ -73,6 +73,45 @@ class DTOConfig:
 
 
 @dataclass
+class SequenceDTOConfig:
+    """Autoregressive lattice DTO over prefix-conditioned tool trajectories."""
+
+    enabled: bool = False
+    max_steps: int = 8
+    min_steps: int = 1
+    beam_width: int = 4
+    samples: int = 8
+    iters: int = 24
+    lr: float = 0.35
+    temperature: float = 1.0
+    kl_weight: float = 0.10
+    step_reward_weight: float = 1.0
+    trajectory_reward_weight: float = 2.0
+    self_consistency_weight: float = 0.20
+    length_cost: float = 0.01
+    stop_logit: float = -2.0
+
+    def __post_init__(self) -> None:
+        if self.max_steps < 1:
+            raise ValueError("sequence_dto.max_steps must be >= 1")
+        if not 1 <= self.min_steps <= self.max_steps:
+            raise ValueError("sequence_dto.min_steps must be in [1, max_steps]")
+        if self.beam_width < 1 or self.samples < 0 or self.iters < 0:
+            raise ValueError("sequence DTO beam/iteration counts must be non-negative")
+        if self.lr < 0 or self.temperature <= 0:
+            raise ValueError("sequence DTO requires lr >= 0 and temperature > 0")
+        weights = (
+            self.kl_weight,
+            self.step_reward_weight,
+            self.trajectory_reward_weight,
+            self.self_consistency_weight,
+            self.length_cost,
+        )
+        if any(weight < 0 for weight in weights):
+            raise ValueError("sequence DTO objective weights must be non-negative")
+
+
+@dataclass
 class InertiaConfig:
     """Tool Usage Inertia / Inertial Sensing (paper section: Quán tính)."""
 
@@ -103,6 +142,7 @@ class ACDANConfig:
     ablation: AblationFlags = field(default_factory=AblationFlags)
     latent: LatentConfig = field(default_factory=LatentConfig)
     dto: DTOConfig = field(default_factory=DTOConfig)
+    sequence_dto: SequenceDTOConfig = field(default_factory=SequenceDTOConfig)
     inertia: InertiaConfig = field(default_factory=InertiaConfig)
     verification: VerificationConfig = field(default_factory=VerificationConfig)
 
@@ -119,6 +159,7 @@ class ACDANConfig:
             "ablation": (AblationFlags, data.pop("ablation", None)),
             "latent": (LatentConfig, data.pop("latent", None)),
             "dto": (DTOConfig, data.pop("dto", None)),
+            "sequence_dto": (SequenceDTOConfig, data.pop("sequence_dto", None)),
             "inertia": (InertiaConfig, data.pop("inertia", None)),
             "verification": (VerificationConfig, data.pop("verification", None)),
         }

@@ -48,6 +48,7 @@ class VLLMCoreModel:
             "max_model_len": max_model_len,
             "gpu_memory_utilization": gpu_memory_utilization,
             "seed": seed,
+            "enable_prefix_caching": True,
         }
         if self.extract_hidden_states:
             from vllm.config.kv_transfer import KVTransferConfig  # lazy
@@ -83,6 +84,7 @@ class VLLMCoreModel:
         self.n_score_batches = 0
         self.n_prompt_tokens = 0
         self._hidden_cache: dict[str, np.ndarray] = {}
+        self._conditional_cache: dict[tuple[str, tuple[int, ...], bool], np.ndarray] = {}
 
     @staticmethod
     def _default_hidden_state_storage() -> str:
@@ -210,6 +212,69 @@ class VLLMCoreModel:
         return scores
 
     # ----------------------------------------------------------- CoreModel
+
+    def _tool_prefix_context(self, task: Task, prefix: tuple[int, ...]) -> str:
+        prompt = str(task.metadata.get("prompt", ""))
+        if prefix:
+            selected = "\n".join(
+                f"{i + 1}. {task.vocab[action]}" for i, action in enumerate(prefix)
+            )
+        else:
+            selected = "(none)"
+        return (
+            f"{prompt}\n\nSelected tool calls so far:\n{selected}\n\n"
+            "Choose the next tool call. If the request is fully covered, choose <STOP>.\n"
+            "Next call: "
+        )
+
+    def conditional_prior_logits(
+        self,
+        task: Task,
+        latent: np.ndarray,
+        prefix: tuple[int, ...],
+        include_stop: bool = False,
+    ) -> np.ndarray:
+        """Score all next tools under the actual selected prefix."""
+        return self.conditional_prior_logits_batch(
+            task, latent, [tuple(prefix)], include_stop=include_stop
+        )[0]
+
+    def conditional_prior_logits_batch(
+        self,
+        task: Task,
+        latent: np.ndarray,
+        prefixes,
+        include_stop: bool = False,
+    ) -> np.ndarray:
+        """Batch all active prefixes at one lattice depth in one vLLM call."""
+        prefixes = [tuple(int(action) for action in prefix) for prefix in prefixes]
+        missing = [
+            prefix for prefix in prefixes
+            if (task.task_id, prefix, bool(include_stop)) not in self._conditional_cache
+        ]
+        templates = task.metadata.get("action_templates", {}) or {}
+        if missing:
+            contexts: List[str] = []
+            continuations: List[str] = []
+            action_text = [str(templates.get(name, name)) for name in task.vocab]
+            if include_stop:
+                action_text.append("<STOP>")
+            for prefix in missing:
+                context = self._tool_prefix_context(task, prefix)
+                contexts.extend([context] * len(action_text))
+                continuations.extend(action_text)
+            scores = self._score_continuations(contexts, continuations)
+            width = len(action_text)
+            matrix = np.asarray(scores, dtype=np.float64).reshape(len(missing), width)
+            self.n_score_batches += 1
+            for prefix, row in zip(missing, matrix):
+                self._conditional_cache[
+                    (task.task_id, prefix, bool(include_stop))
+                ] = row.copy()
+        return np.stack([
+            self._conditional_cache[(task.task_id, prefix, bool(include_stop))]
+            for prefix in prefixes
+        ])
 
     def prior_logits(self, task: Task, latent: np.ndarray) -> np.ndarray:
         H, V = task.horizon, task.vocab_size

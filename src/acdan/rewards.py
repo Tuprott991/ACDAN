@@ -44,6 +44,16 @@ class ProcessRewardModel(Protocol):
     def score_actions(self, task: Task, latent: np.ndarray, actions: Sequence[int]) -> List[float]:
         """Per-step PRM scores in [0, 1] for a *discrete* executed plan."""
 
+    def extension_rewards(
+        self, task: Task, latent: np.ndarray, prefix: Sequence[int]
+    ) -> np.ndarray:
+        """Reward for each possible next action after ``prefix``."""
+
+    def trajectory_rewards(
+        self, task: Task, latent: np.ndarray, trajectories: Sequence[Sequence[int]]
+    ) -> List[float]:
+        """Score complete trajectories in [0, 1]."""
+
 
 class MockProcessReward:
     """Offline PRM stand-in with a linear, differentiable reward surface.
@@ -140,6 +150,32 @@ class MockProcessReward:
         for h, a in enumerate(actions):
             row = min(h, R.shape[0] - 1)
             out.append(float(R[row, int(a)]))
+        return out
+
+    def extension_rewards(
+        self, task: Task, latent: np.ndarray, prefix: Sequence[int]
+    ) -> np.ndarray:
+        rewards = self._sigmoid(self.step_reward_matrix(task, latent))
+        row = min(len(prefix), rewards.shape[0] - 1)
+        return np.asarray(rewards[row], dtype=np.float64)
+
+    def trajectory_rewards(
+        self, task: Task, latent: np.ndarray, trajectories: Sequence[Sequence[int]]
+    ) -> List[float]:
+        out: List[float] = []
+        for trajectory in trajectories:
+            actions = tuple(int(a) for a in trajectory)
+            if task.optimal_plan is not None:
+                target = tuple(int(a) for a in task.optimal_plan)
+                denom = max(len(actions), len(target), 1)
+                matches = sum(
+                    int(i < len(actions) and i < len(target) and actions[i] == target[i])
+                    for i in range(denom)
+                )
+                out.append(float(matches / denom))
+            else:
+                scores = self.score_actions(task, latent, actions)
+                out.append(float(np.mean(scores)) if scores else 0.0)
         return out
 
     @staticmethod

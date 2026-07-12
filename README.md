@@ -109,9 +109,21 @@ python -m acdan.run_experiment --method acdan --dataset bfcl \
   --encoder vllm_hidden --encoder-pooling last
 ```
 
-This grounds ACDAN's latent state in the policy model's own vLLM forward path,
-but it remains controller-side feature extraction. It does not update the base
-LLM hidden states or weights during decoding.
+`--encoder vllm_hidden` grounds ACDAN's latent state in the policy model's own
+vLLM forward path, but remains controller-side feature extraction. It does not
+update the base LLM hidden states or weights during decoding.
+
+For multi-tool planning, enable prefix-conditioned autoregressive lattice DTO:
+
+```bash
+python -m acdan.run_experiment --method acdan --dataset bfcl \
+  --data-path data/bfcl_test.jsonl \
+  --policy vllm --policy-model Qwen/Qwen2.5-7B-Instruct --prm llm \
+  --encoder hash --no-latent --dto-mode autoregressive \
+  --sequence-max-steps 8 --sequence-beam-width 4 --sequence-samples 8 \
+  --disable no_graph,no_inertia,no_verification --save-per-task \
+  --out results/bfcl_qwen7b_sequence_dto.json
+```
 
 Closest comparison families for the paper are **Best-of-N + verifier/PRM**,
 **MCTS/RAP-style planning**, **Tree of Thoughts**, **Self-Refine**, **s1/budget
@@ -130,6 +142,7 @@ objective / update rules in [`docs/math.md`](docs/math.md).
 | Latent reasoning (recurrent unroll) | [`latent_reasoning.py`](src/acdan/latent_reasoning.py) | implemented |
 | In-Place TTT | `latent_reasoning.LatentReasoner._ttt_adapt` | implemented |
 | Differentiable Textual Optimization | [`dto.py`](src/acdan/dto.py) | implemented (analytic grads) |
+| Autoregressive Lattice DTO | [`sequence_dto.py`](src/acdan/sequence_dto.py) | implemented (prefix-conditioned analytic grads) |
 | Process Reward Model / LLM-as-PRM | [`rewards.py`](src/acdan/rewards.py), [`prm_adapter.py`](src/acdan/backends/prm_adapter.py) | mock + LLM-backed adapter |
 | Net Information Gain (O(N)) | `rewards.net_information_gain` | implemented |
 | Two-layer graph (EX + ED) | [`graph.py`](src/acdan/graph.py) | implemented |

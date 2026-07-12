@@ -30,6 +30,7 @@ from acdan.inertia import InertialSensor
 from acdan.latent_reasoning import LatentReasoner
 from acdan.registry import CoreModel
 from acdan.rewards import ProcessRewardModel, net_information_gain
+from acdan.sequence_dto import AutoregressiveLatticeOptimizer
 from acdan.types import (
     OutcomeChecker,
     Plan,
@@ -108,6 +109,11 @@ class ACDANAgent:
         return fixed
 
     def _plan(self, task: Task, latent: np.ndarray) -> Plan:
+        if self.cfg.sequence_dto.enabled:
+            optimizer = AutoregressiveLatticeOptimizer(
+                self.cfg.sequence_dto, self.core, self.prm, seed=self.cfg.seed
+            )
+            return optimizer.optimize(task, latent, use_dto=self.cfg.ablation.dto)
         prior = self.core.prior_logits(task, latent)
         if not self.cfg.ablation.dto:
             return DifferentiableTextOptimizer.greedy_decode(prior)
@@ -128,11 +134,14 @@ class ACDANAgent:
         # 1) Plan (DTO or greedy) and 2) overlay inertial-sensing decisions.
         plan = self._plan(task, latent)
         draft = list(plan.actions)
-        fixed = self._inertia_plan(task, draft)
+        # A sequence-lattice plan is already prefix-conditioned. Post-hoc
+        # inertia would invalidate its downstream state and trajectory score.
+        fixed = {} if self.cfg.sequence_dto.enabled else self._inertia_plan(task, draft)
 
         actions: List[int] = []
         from_inertia: List[bool] = []
-        for h in range(task.horizon):
+        execution_horizon = len(draft) if self.cfg.sequence_dto.enabled else task.horizon
+        for h in range(execution_horizon):
             if h in fixed:
                 actions.append(fixed[h])
                 from_inertia.append(True)
@@ -153,14 +162,14 @@ class ACDANAgent:
             dep_entropy = graph.von_neumann_entropy()
             _, dead_idx = graph.prune()
 
-        kept = [h for h in range(task.horizon) if h not in set(dead_idx)]
+        kept = [h for h in range(len(actions)) if h not in set(dead_idx)]
 
         # 5) Inference-cost surrogate over *kept* steps.
         token_cost = sum(
             _INERTIA_STEP_COST if from_inertia[h] else _PLAN_STEP_COST for h in kept
         )
         llm_calls = sum(1 for h in kept if not from_inertia[h])
-        inertia_saved = sum(1 for h in range(task.horizon) if from_inertia[h])
+        inertia_saved = sum(1 for h in range(len(actions)) if from_inertia[h])
 
         # 6) Self-verification & confidence calibration.
         mean_prm = float(np.mean(prm_scores)) if prm_scores else 0.0
@@ -170,6 +179,7 @@ class ACDANAgent:
                 logits=plan.logits,
                 dto_steps=plan.dto_steps,
                 objective_trace=plan.objective_trace,
+                metadata=dict(plan.metadata),
             )
             verification = self.verifier.verify(
                 task, latent, executed_plan, mean_prm, use_calibration=ab.confidence_margin
@@ -194,7 +204,7 @@ class ACDANAgent:
                 from_inertia=from_inertia[h],
                 is_dead_step=h in set(dead_idx),
             )
-            for h in range(task.horizon)
+            for h in range(len(actions))
         ]
 
         metrics = RolloutMetrics(
@@ -202,14 +212,17 @@ class ACDANAgent:
             correct=correct,
             llm_calls=llm_calls,
             inertia_saved_calls=inertia_saved,
-            steps=task.horizon,
+            steps=len(actions),
             dead_steps_pruned=len(dead_idx),
             token_cost=token_cost,
             mean_prm=mean_prm,
             confidence=verification.confidence,
             abstained=verification.abstained,
             dependency_entropy=dep_entropy,
-            metadata={"family": task.metadata.get("family", "?")},
+            metadata={
+                "family": task.metadata.get("family", "?"),
+                **dict(plan.metadata),
+            },
         )
         return AgentResult(
             metrics=metrics, plan=plan, steps=steps,

@@ -33,7 +33,7 @@ from acdan.baselines import (
     self_refine,
     tree_of_thoughts,
 )
-from acdan.config import ACDANConfig, AblationFlags
+from acdan.config import ACDANConfig, AblationFlags, SequenceDTOConfig
 from acdan.datasets.base import (
     ANSWER_SELECTION_DATASETS,
     MATH_DATASETS,
@@ -239,6 +239,24 @@ def run(args: argparse.Namespace) -> dict:
     if args.disable or args.no_latent or args.no_ttt:
         config = dataclasses.replace(config, ablation=AblationFlags(**flags))
 
+    sequence_dto = SequenceDTOConfig(
+        enabled=args.dto_mode == "autoregressive",
+        max_steps=args.sequence_max_steps,
+        min_steps=args.sequence_min_steps,
+        beam_width=args.sequence_beam_width,
+        samples=args.sequence_samples,
+        iters=args.sequence_iters,
+        lr=args.sequence_lr,
+        temperature=args.sequence_temperature,
+        kl_weight=args.sequence_kl_weight,
+        step_reward_weight=args.sequence_step_reward_weight,
+        trajectory_reward_weight=args.sequence_trajectory_reward_weight,
+        self_consistency_weight=args.sequence_self_consistency_weight,
+        length_cost=args.sequence_length_cost,
+        stop_logit=args.sequence_stop_logit,
+    )
+    config = dataclasses.replace(config, sequence_dto=sequence_dto)
+
     _monitor(args, f"loading core policy={args.policy} model={args.policy_model or 'mock'}")
     t_stage = time.perf_counter()
     core = _build_core(args.policy, args.policy_model, args)
@@ -360,10 +378,18 @@ def run(args: argparse.Namespace) -> dict:
             abst = res.metrics.abstained
             tok_surrogate = res.metrics.token_cost
             cost_info = {
-                "policy_passes": 1,
-                "prm_passes": 1,
+                "policy_passes": float(res.plan.metadata.get("policy_score_batches", 1.0)),
+                "prm_passes": float(res.plan.metadata.get("prm_score_batches", 1.0)),
                 "samples": 1,
-                "verified_candidates": task.horizon * task.vocab_size,
+                "verified_candidates": float(
+                    res.plan.metadata.get(
+                        "evaluated_edges", task.horizon * task.vocab_size
+                    )
+                ),
+                "expanded_nodes": float(res.plan.metadata.get("expanded_nodes", 0.0)),
+                "trajectory_candidates": float(
+                    res.plan.metadata.get("trajectory_candidates", 0.0)
+                ),
             }
         else:
             ab = config.ablation
@@ -424,8 +450,17 @@ def run(args: argparse.Namespace) -> dict:
             tok_surrogate = float(task.horizon) * float(cost_info.get("samples", 1.0))
         cur_tokens = getattr(core, "n_prompt_tokens", 0) + getattr(prm, "n_prompt_tokens", 0)
         rows.append({
-            "task_id": task.task_id, "family": task.metadata.get("family"),
+            "task_id": task.task_id,
+            "family": task.metadata.get("family"),
+            "category": task.metadata.get("category"),
             "correct": bool(correct), "confidence": float(conf), "abstained": bool(abst),
+            "action_ids": [int(action) for action in (
+                res.plan.actions if args.method == "acdan" else br.actions
+            )],
+            "actions": [task.vocab[int(action)] for action in (
+                res.plan.actions if args.method == "acdan" else br.actions
+            )],
+            "plan_metadata": dict(res.plan.metadata) if args.method == "acdan" else {},
             "latency_s": time.perf_counter() - ts,
             "real_prompt_tokens": cur_tokens - base_tokens,
             "token_surrogate": tok_surrogate,
@@ -433,6 +468,8 @@ def run(args: argparse.Namespace) -> dict:
             "prm_passes": float(cost_info.get("prm_passes", 0.0)),
             "samples": float(cost_info.get("samples", 1.0)),
             "verified_candidates": float(cost_info.get("verified_candidates", 0.0)),
+            "expanded_nodes": float(cost_info.get("expanded_nodes", 0.0)),
+            "trajectory_candidates": float(cost_info.get("trajectory_candidates", 0.0)),
         })
         base_tokens = cur_tokens
         if _should_log_progress(args, task_idx, total_tasks):
@@ -482,6 +519,8 @@ def run(args: argparse.Namespace) -> dict:
         "policy_model": args.policy_model, "prm": args.prm, "seed": args.seed,
         "math_evidence": args.math_evidence if args.dataset in MATH_DATASETS else None,
         "dto_self_consistency_weight": config.dto.self_consistency_weight,
+        "dto_mode": args.dto_mode,
+        "sequence_dto": dataclasses.asdict(config.sequence_dto),
         "ablation": dataclasses.asdict(config.ablation),
         "inertia_fit_path": args.inertia_fit_path,
         "n_tasks": n,
@@ -498,9 +537,21 @@ def run(args: argparse.Namespace) -> dict:
         "mean_samples": float(np.mean([r["samples"] for r in rows])) if n else 0.0,
         "mean_verified_candidates": float(np.mean([r["verified_candidates"] for r in rows])) if n else 0.0,
         "mean_prm_passes": float(np.mean([r["prm_passes"] for r in rows])) if n else 0.0,
+        "mean_expanded_nodes": float(np.mean([r["expanded_nodes"] for r in rows])) if n else 0.0,
+        "mean_trajectory_candidates": float(np.mean([r["trajectory_candidates"] for r in rows])) if n else 0.0,
     }
     if answer_tasks:
         summary["mean_vocab_size"] = float(np.mean([t.vocab_size for t in answer_tasks]))
+    categories = sorted({str(row["category"]) for row in rows if row.get("category")})
+    if categories:
+        category_accuracy = {
+            category: float(np.mean([
+                row["correct"] for row in rows if str(row.get("category")) == category
+            ]))
+            for category in categories
+        }
+        summary["category_accuracy"] = category_accuracy
+        summary["category_macro_accuracy"] = float(np.mean(list(category_accuracy.values())))
     if oracle_acc is not None:
         summary["oracle_candidate_accuracy"] = oracle_acc
         summary["always_first_accuracy"] = first_acc
@@ -524,6 +575,23 @@ def build_parser() -> argparse.ArgumentParser:
                             "tot", "rap", "refine", "s1"],
                    help="ACDAN or a baseline (incl. ToT, RAP, Self-Refine, s1).")
     p.add_argument("--disable", default="", help="Comma list of ablation flags to disable.")
+    p.add_argument(
+        "--dto-mode", choices=["independent", "autoregressive"], default="independent",
+        help="Fixed HxV DTO or prefix-conditioned autoregressive lattice DTO.",
+    )
+    p.add_argument("--sequence-max-steps", type=int, default=8)
+    p.add_argument("--sequence-min-steps", type=int, default=1)
+    p.add_argument("--sequence-beam-width", type=int, default=4)
+    p.add_argument("--sequence-samples", type=int, default=8)
+    p.add_argument("--sequence-iters", type=int, default=24)
+    p.add_argument("--sequence-lr", type=float, default=0.35)
+    p.add_argument("--sequence-temperature", type=float, default=1.0)
+    p.add_argument("--sequence-kl-weight", type=float, default=0.10)
+    p.add_argument("--sequence-step-reward-weight", type=float, default=1.0)
+    p.add_argument("--sequence-trajectory-reward-weight", type=float, default=2.0)
+    p.add_argument("--sequence-self-consistency-weight", type=float, default=0.20)
+    p.add_argument("--sequence-length-cost", type=float, default=0.01)
+    p.add_argument("--sequence-stop-logit", type=float, default=-2.0)
     p.add_argument(
         "--no-latent",
         action="store_true",

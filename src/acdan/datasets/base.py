@@ -159,13 +159,16 @@ def outcome_exact(task: Task, actions: Sequence[int]) -> bool:
 
 
 def outcome_tool_sequence(task: Task, actions: Sequence[int]) -> bool:
-    """Tool/operator: executed action names prefix-match the gold sequence."""
+    """Tool/operator: executed action names exactly match the gold sequence."""
     gold = task.metadata.get("gold", [])
     if isinstance(gold, str):
         gold = [gold]
     pred = [task.vocab[int(a)] for a in actions]
-    n = min(len(pred), len(gold))
-    return n > 0 and all(_norm(pred[i]) == _norm(gold[i]) for i in range(n)) and len(pred) >= len(gold)
+    return (
+        len(pred) == len(gold)
+        and len(pred) > 0
+        and all(_norm(pred[i]) == _norm(gold[i]) for i in range(len(gold)))
+    )
 
 
 def build_outcome_checker(kind: str):
