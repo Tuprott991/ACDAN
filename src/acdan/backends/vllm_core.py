@@ -112,6 +112,11 @@ class VLLMCoreModel:
             hidden = getattr(cfg, "hidden_size", None)
             if hidden is not None:
                 return int(hidden)
+            # Check nested config (e.g., Gemma-4's text_config)
+            if hasattr(cfg, "text_config"):
+                hidden = getattr(cfg.text_config, "hidden_size", None)
+                if hidden is not None:
+                    return int(hidden)
         except Exception:
             pass
         return 4096

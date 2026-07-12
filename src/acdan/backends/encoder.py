@@ -108,7 +108,11 @@ class HFLLMHiddenStateEncoder:
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
         self.model.eval()
-        self.dim = int(self.model.config.hidden_size)
+        # Handle nested config (e.g., Gemma-4's text_config)
+        hidden = getattr(self.model.config, "hidden_size", None)
+        if hidden is None and hasattr(self.model.config, "text_config"):
+            hidden = getattr(self.model.config.text_config, "hidden_size", None)
+        self.dim = int(hidden or 4096)
 
     def _pool(self, states, attention_mask):
         import torch
